@@ -84,6 +84,90 @@ stats = helper.get_statistics()
 print(f"Прогресс: {stats['completed_requirements']}/{stats['total_requirements']}")
 ```
 
+### 3.1 Быстрый автопоток (analyzer + generators)
+
+Автоматически анализирует требования, добавляет анализ и базовый набор тестов
+(CRUD + EP/BVA где возможно).
+
+```bash
+./venv/bin/python - <<'PY'
+from src.utils.test_generator_helper import (
+    TestGeneratorHelper,
+    create_api_crud_test_suite,
+    create_boundary_test_cases,
+    create_equivalence_test_cases,
+)
+from src.utils.requirement_analyzer import RequirementAnalyzer
+
+helper = TestGeneratorHelper()
+analyzer = RequirementAnalyzer()
+
+pending = helper.get_pending_requirements()
+print(f"Pending: {len(pending)}")
+
+for req_info in pending:
+    req_id = req_info["id"]
+    req_text = helper.get_requirement_text(req_id)
+
+    analysis = analyzer.analyze(req_text, req_id)
+    helper_params = analyzer.to_helper_format(analysis)
+    helper.add_analysis(req_id=req_id, **helper_params)
+
+    base_tc_id = f"TC-{req_id.split('-')[1]}"
+    crud_tests = create_api_crud_test_suite(
+        req_id=req_id,
+        base_tc_id=base_tc_id,
+        endpoint=analysis.endpoint,
+        http_method=analysis.http_method,
+        req_type=analysis.requirement_type,
+        preconditions=["API доступен"],
+    )
+    helper.add_test_cases_bulk(req_id, crud_tests)
+
+    for field, bounds in analysis.boundary_values.items():
+        if not all(k in bounds for k in ("min", "max")):
+            continue
+        try:
+            valid_example = (bounds["min"] + bounds["max"]) // 2
+            invalid_low = bounds["min"] - 1
+            invalid_high = bounds["max"] + 1
+        except TypeError:
+            continue
+
+        bva_tests = create_boundary_test_cases(
+            req_id=req_id,
+            base_tc_id=f"{base_tc_id}-{field.upper()}",
+            field_name=field,
+            min_value=bounds["min"],
+            max_value=bounds["max"],
+            valid_example=valid_example,
+            invalid_low=invalid_low,
+            invalid_high=invalid_high,
+            endpoint=analysis.endpoint,
+        )
+        helper.add_test_cases_bulk(req_id, bva_tests)
+
+    for field, classes in analysis.equivalence_classes.items():
+        if not classes.get("valid") and not classes.get("invalid"):
+            continue
+        ep_tests = create_equivalence_test_cases(
+            req_id=req_id,
+            base_tc_id=f"{base_tc_id}-{field.upper()}",
+            field_name=field,
+            valid_values=classes.get("valid", []),
+            invalid_values=classes.get("invalid", []),
+            endpoint=analysis.endpoint,
+        )
+        helper.add_test_cases_bulk(req_id, ep_tests)
+
+    helper.mark_requirement_completed(req_id)
+    print(f"Completed {req_id}")
+
+stats = helper.get_statistics()
+print(stats)
+PY
+```
+
 ### 4. Использование генераторов шаблонов
 
 Для типовых тестов используйте встроенные генераторы:

@@ -14,6 +14,20 @@ from enum import Enum
 
 from src.utils.logger import setup_logger
 from src.utils.security import sanitize_requirement, detect_injection
+from src.utils.input_validation import (
+    validate_requirement_length,
+    validate_requirements_count,
+    validate_test_cases_count,
+)
+from src.utils.security_logging import SecurityLogger
+from src.utils.state_integrity import (
+    sign_state_file,
+    verify_signature,
+    validate_schema,
+    create_backup,
+    restore_from_backup,
+)
+import os
 
 logger = setup_logger(__name__)
 
@@ -161,6 +175,10 @@ class StateManager:
         self.project_dir = Path(project_dir) if project_dir else Path.cwd()
         self.state_file = Path(state_file) if state_file else self.project_dir / self.DEFAULT_STATE_FILE
         self.state: Optional[SessionState] = None
+        os.environ.setdefault(
+            "AI_TEST_GEN_SIGNATURE_KEY",
+            str(self.project_dir / ".ai-test-gen-signature-key"),
+        )
 
         logger.info(f"StateManager инициализирован: {self.state_file}")
 
@@ -193,10 +211,47 @@ class StateManager:
             return None
 
         try:
+            needs_resign = False
             with open(self.state_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
+            # Validate schema before using data
+            is_valid_schema, schema_error = validate_schema(data)
+            if not is_valid_schema:
+                logger.error(f"Невалидная схема state: {schema_error}")
+                SecurityLogger.log_state_integrity_failure(str(self.state_file), schema_error)
+                return None
+
+            # Verify signature if present
+            if "_signature" in data:
+                if not verify_signature(data):
+                    logger.error("Подпись state невалидна, попытка восстановления из backup")
+                    if restore_from_backup(self.state_file):
+                        with open(self.state_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        is_valid_schema, schema_error = validate_schema(data)
+                        if not is_valid_schema:
+                            logger.error(f"Невалидная схема backup state: {schema_error}")
+                            SecurityLogger.log_state_integrity_failure(str(self.state_file), schema_error)
+                            return None
+                        if not verify_signature(data):
+                            logger.error("Подпись backup state невалидна")
+                            return None
+                    else:
+                        return None
+            else:
+                logger.warning("State файл без подписи, будет подписан при следующем сохранении")
+                needs_resign = True
+
             self.state = self._dict_to_session(data)
+            if (
+                self.state.progress.total_requirements != len(self.state.requirements)
+            ):
+                logger.warning("Несоответствие total_requirements, пересчёт")
+                self.state.progress.total_requirements = len(self.state.requirements)
+
+            if needs_resign:
+                self.save()
             logger.info(f"Загружено состояние сессии: {self.state.session_id}")
             return self.state
 
@@ -213,9 +268,14 @@ class StateManager:
         try:
             self.state.updated_at = datetime.now().isoformat()
             data = self._session_to_dict(self.state)
+            data = sign_state_file(data)
+
+            if self.state_file.exists():
+                create_backup(self.state_file)
 
             with open(self.state_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            self.state_file.chmod(0o600)
 
             logger.debug(f"Состояние сохранено: {self.state_file}")
             return True
@@ -253,6 +313,16 @@ class StateManager:
         """
         if not self.state:
             raise ValueError("Сессия не инициализирована")
+
+        is_valid, error = validate_requirement_length(text)
+        if not is_valid:
+            SecurityLogger.log_validation_failure("requirement_length", text, error)
+            raise ValueError(error)
+
+        is_valid, error = validate_requirements_count(len(self.state.requirements) + 1)
+        if not is_valid:
+            SecurityLogger.log_validation_failure("requirements_count", str(len(self.state.requirements) + 1), error)
+            raise ValueError(error)
 
         # Санитизация и проверка безопасности
         display_text = text
@@ -373,6 +443,11 @@ class StateManager:
         req = self.find_requirement_by_id(req_id)
         if not req:
             raise ValueError(f"Требование не найдено: {req_id}")
+
+        is_valid, error = validate_test_cases_count(len(req.test_cases) + 1)
+        if not is_valid:
+            SecurityLogger.log_validation_failure("test_cases_count", str(len(req.test_cases) + 1), error)
+            raise ValueError(error)
 
         # Проверяем уникальность ID
         existing_ids = {tc.id for tc in req.test_cases}
