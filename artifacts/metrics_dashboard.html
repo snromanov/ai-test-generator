@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Метрики тестирования</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #F5F5F7;
+            color: #1D1D1F;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 60px 40px;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+
+        header h1 {
+            font-size: 48px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            color: #1D1D1F;
+            margin-bottom: 12px;
+        }
+
+        header p {
+            font-size: 17px;
+            color: #86868B;
+            font-weight: 400;
+        }
+
+        /* Stats Row */
+        .stats-row {
+            display: flex;
+            justify-content: center;
+            gap: 60px;
+            margin-bottom: 80px;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 64px;
+            font-weight: 600;
+            color: #1D1D1F;
+            letter-spacing: -2px;
+            line-height: 1;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: #86868B;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 8px;
+        }
+
+        /* Cards Grid */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        .card {
+            background: #FFFFFF;
+            border-radius: 18px;
+            padding: 32px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+        }
+
+        .card-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: #86868B;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 24px;
+        }
+
+        /* Priority List */
+        .metric-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .metric-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .metric-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .metric-name {
+            flex: 1;
+            font-size: 15px;
+            color: #1D1D1F;
+        }
+
+        .metric-value {
+            font-size: 15px;
+            font-weight: 500;
+            color: #1D1D1F;
+            min-width: 40px;
+            text-align: right;
+        }
+
+        .metric-pct {
+            font-size: 13px;
+            color: #86868B;
+            min-width: 50px;
+            text-align: right;
+        }
+
+        /* Progress Bars */
+        .progress-list {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .progress-item {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .progress-name {
+            font-size: 14px;
+            color: #1D1D1F;
+        }
+
+        .progress-value {
+            font-size: 14px;
+            color: #86868B;
+        }
+
+        .progress-bar {
+            height: 6px;
+            background: #E5E5EA;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.6s ease;
+        }
+
+        /* Requirements */
+        .req-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .req-chip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background: #F5F5F7;
+            border-radius: 20px;
+        }
+
+        .req-chip-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #1D1D1F;
+        }
+
+        .req-chip-count {
+            font-size: 13px;
+            color: #86868B;
+        }
+
+        /* Techniques Table */
+        .techniques-table {
+            width: 100%;
+        }
+
+        .tech-row {
+            display: flex;
+            align-items: center;
+            padding: 14px 0;
+            border-bottom: 1px solid #F5F5F7;
+        }
+
+        .tech-row:last-child {
+            border-bottom: none;
+        }
+
+        .tech-name {
+            flex: 1;
+            font-size: 14px;
+            color: #1D1D1F;
+        }
+
+        .tech-bar {
+            width: 120px;
+            height: 4px;
+            background: #E5E5EA;
+            border-radius: 2px;
+            margin: 0 16px;
+            overflow: hidden;
+        }
+
+        .tech-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #007AFF, #5856D6);
+            border-radius: 2px;
+        }
+
+        .tech-count {
+            font-size: 14px;
+            font-weight: 500;
+            color: #1D1D1F;
+            min-width: 32px;
+            text-align: right;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            color: #86868B;
+            font-size: 13px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 40px 20px;
+            }
+
+            header h1 {
+                font-size: 32px;
+            }
+
+            .stats-row {
+                flex-wrap: wrap;
+                gap: 40px;
+            }
+
+            .stat-number {
+                font-size: 48px;
+            }
+
+            .cards-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Метрики тестирования</h1>
+            <p>Сгенерировано 16.01.2026 14:35</p>
+        </header>
+
+        <div class="stats-row">
+            <div class="stat-item">
+                <div class="stat-number">67</div>
+                <div class="stat-label">Тест-кейсов</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">8</div>
+                <div class="stat-label">Требований</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">10</div>
+                <div class="stat-label">Техник</div>
+            </div>
+        </div>
+
+        <div class="cards-grid">
+            <div class="card">
+                <div class="card-title">Приоритет</div>
+                <div class="metric-list">
+                    
+            <div class="metric-row">
+                <div class="metric-dot" style="background: #34C759"></div>
+                <div class="metric-name">Средний</div>
+                <div class="metric-value">30</div>
+                <div class="metric-pct">44.8%</div>
+            </div>
+        
+
+            <div class="metric-row">
+                <div class="metric-dot" style="background: #FF9500"></div>
+                <div class="metric-name">Высокий</div>
+                <div class="metric-value">29</div>
+                <div class="metric-pct">43.3%</div>
+            </div>
+        
+
+            <div class="metric-row">
+                <div class="metric-dot" style="background: #FF3B30"></div>
+                <div class="metric-name">Критический</div>
+                <div class="metric-value">8</div>
+                <div class="metric-pct">11.9%</div>
+            </div>
+        
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Тип тестирования</div>
+                <div class="progress-list">
+                    
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span class="progress-name">Негативные</span>
+                    <span class="progress-value">41 (61.2%)</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: 100.0%; background: #FF3B30"></div>
+                </div>
+            </div>
+        
+
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span class="progress-name">Позитивные</span>
+                    <span class="progress-value">26 (38.8%)</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: 63.39869281045751%; background: #34C759"></div>
+                </div>
+            </div>
+        
+                </div>
+            </div>
+        </div>
+
+        <div class="cards-grid">
+            <div class="card">
+                <div class="card-title">Покрытие требований</div>
+                <div class="req-grid">
+                    
+            <div class="req-chip">
+                <span class="req-chip-name">REQ-001</span>
+                <span class="req-chip-count">13</span>
+            </div>
+        
+
+            <div class="req-chip">
+                <span class="req-chip-name">REQ-005</span>
+                <span class="req-chip-count">13</span>
+            </div>
+        
+
+            <div class="req-chip">
+                <span class="req-chip-name">REQ-008</span>
+                <span class="req-chip-count">11</span>
+            </div>
+        
+
+            <div class="req-chip">
+                <span class="req-chip-name">REQ-003</span>
+                <span class="req-chip-count">8</span>
+            </div>
+        
+
+            <div class="req-chip">
+                <span class="req-chip-name">REQ-004</span>
+                <span class="req-chip-count">8</span>
+            </div>
+        
+
+            <div class="req-chip">
+                <span class="req-chip-name">REQ-007</span>
+                <span class="req-chip-count">8</span>
+            </div>
+        
+
+            <div class="req-chip">
+                <span class="req-chip-name">REQ-002</span>
+                <span class="req-chip-count">3</span>
+            </div>
+        
+
+            <div class="req-chip">
+                <span class="req-chip-name">REQ-006</span>
+                <span class="req-chip-count">3</span>
+            </div>
+        
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Техники тестирования</div>
+                <div class="techniques-table">
+                    
+            <div class="tech-row">
+                <div class="tech-name" title="ЭК: Невалидный класс">ЭК: Невалидный класс</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 100.0%"></div>
+                </div>
+                <div class="tech-count">24</div>
+            </div>
+        
+
+            <div class="tech-row">
+                <div class="tech-name" title="ЭК: Валидный класс">ЭК: Валидный класс</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 45.83333333333333%"></div>
+                </div>
+                <div class="tech-count">11</div>
+            </div>
+        
+
+            <div class="tech-row">
+                <div class="tech-name" title="Use Case: Позитивный сценарий">Use Case: Позитивный сценарий</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 33.33333333333333%"></div>
+                </div>
+                <div class="tech-count">8</div>
+            </div>
+        
+
+            <div class="tech-row">
+                <div class="tech-name" title="Переходы состояний: Валидный путь">Переходы состояний: Валидный путь</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 20.833333333333336%"></div>
+                </div>
+                <div class="tech-count">5</div>
+            </div>
+        
+
+            <div class="tech-row">
+                <div class="tech-name" title="ЭК: Несуществующий ресурс">ЭК: Несуществующий ресурс</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 16.666666666666664%"></div>
+                </div>
+                <div class="tech-count">4</div>
+            </div>
+        
+
+            <div class="tech-row">
+                <div class="tech-name" title="Угадывание ошибок: Дубликат ID">Угадывание ошибок: Дубликат ID</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 12.5%"></div>
+                </div>
+                <div class="tech-count">3</div>
+            </div>
+        
+
+            <div class="tech-row">
+                <div class="tech-name" title="ЭК: Отсутствуют обязательные поля">ЭК: Отсутствуют обязательные поля</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 12.5%"></div>
+                </div>
+                <div class="tech-count">3</div>
+            </div>
+        
+
+            <div class="tech-row">
+                <div class="tech-name" title="Переходы состояний: Невалидный путь">Переходы состояний: Невалидный путь</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 12.5%"></div>
+                </div>
+                <div class="tech-count">3</div>
+            </div>
+        
+
+            <div class="tech-row">
+                <div class="tech-name" title="Угадывание ошибок: Неверный формат ID">Угадывание ошибок: Неверный форм...</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 8.333333333333332%"></div>
+                </div>
+                <div class="tech-count">2</div>
+            </div>
+        
+
+            <div class="tech-row">
+                <div class="tech-name" title="ЭК: Пустой результат">ЭК: Пустой результат</div>
+                <div class="tech-bar">
+                    <div class="tech-bar-fill" style="width: 4.166666666666666%"></div>
+                </div>
+                <div class="tech-count">1</div>
+            </div>
+        
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            AI Test Generator v1.0
+        </footer>
+    </div>
+</body>
+</html>

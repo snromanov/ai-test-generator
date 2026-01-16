@@ -1,0 +1,27 @@
+# Confluence Integration
+atlassian-python-api>=3.41.0
+beautifulsoup4>=4.12.0
+
+# Excel/CSV Export
+openpyxl>=3.1.0
+
+# Metrics & Visualization
+pandas>=2.0.0
+matplotlib>=3.7.0
+
+# CLI
+click>=8.1.0
+python-dotenv>=1.0.0
+
+# Development
+
+# Security Tools
+# Dependency vulnerability scanning
+safety>=3.0.1
+pip-audit>=2.6.3
+
+# Code security analysis
+bandit>=1.7.6
+
+# License compliance
+pip-licenses>=4.3.4
