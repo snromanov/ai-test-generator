@@ -19,6 +19,13 @@ from src.prompts.qa_prompts import get_cli_agent_prompt
 from src.state.state_manager import StateManager
 from src.utils.project_info import ProjectInfo
 from src.utils.logger import setup_logger
+from src.utils.input_validation import (
+    validate_confluence_page_id,
+    validate_file_path,
+    validate_file_size,
+    validate_requirement_length,
+    validate_export_filename,
+)
 
 logger = setup_logger(__name__)
 
@@ -41,6 +48,11 @@ def load_confluence(page_id: str):
     click.echo(f"Загрузка страницы Confluence: {page_id}")
 
     try:
+        is_valid, error = validate_confluence_page_id(page_id)
+        if not is_valid:
+            click.echo(click.style(f"Невалидный ID страницы: {error}", fg="red"))
+            return
+
         generator = TestCaseGenerator()
         requirements = generator.load_from_confluence(page_id)
 
@@ -65,6 +77,15 @@ def load_file(file_path: str):
     click.echo(f"Чтение файла: {file_path}")
 
     try:
+        is_valid, error = validate_file_path(file_path, allow_absolute=True)
+        if not is_valid:
+            click.echo(click.style(f"Невалидный путь: {error}", fg="red"))
+            return
+        is_valid, error = validate_file_size(Path(file_path))
+        if not is_valid:
+            click.echo(click.style(f"Невалидный файл: {error}", fg="red"))
+            return
+
         generator = TestCaseGenerator()
         requirements = generator.load_from_file(file_path)
 
@@ -126,6 +147,11 @@ def load_demo(name: str):
     click.echo(f"Загрузка демо-требований: {selected.name}")
     
     try:
+        is_valid, error = validate_file_size(selected)
+        if not is_valid:
+            click.echo(click.style(f"Невалидный файл: {error}", fg="red"))
+            return
+
         generator = TestCaseGenerator()
         requirements = generator.load_from_file(str(selected))
 
@@ -272,6 +298,11 @@ def state_add(text: str):
         click.echo(click.style("Сессия не найдена. Создайте: python main.py state new", fg="red"))
         return
 
+    is_valid, error = validate_requirement_length(text)
+    if not is_valid:
+        click.echo(click.style(f"Невалидное требование: {error}", fg="red"))
+        return
+
     req = sm.add_requirement(text, source="manual")
     click.echo(click.style(f"Добавлено требование: {req.id}", fg="green"))
 
@@ -358,6 +389,16 @@ def state_export(output: str, format: str):
 
     if not session.requirements:
         click.echo(click.style("Нет требований для экспорта.", fg="yellow"))
+        return
+
+    output_path = Path(output)
+    is_valid, error = validate_export_filename(output_path.name)
+    if not is_valid:
+        click.echo(click.style(f"Невалидное имя файла: {error}", fg="red"))
+        return
+    is_valid, error = validate_file_path(str(output_path), allow_absolute=True)
+    if not is_valid:
+        click.echo(click.style(f"Невалидный путь экспорта: {error}", fg="red"))
         return
 
     # Конвертируем state в GenerationResult
