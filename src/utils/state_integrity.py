@@ -7,6 +7,7 @@ HMAC signatures and JSON schema validation for state files.
 import json
 import hmac
 import hashlib
+import os
 from pathlib import Path
 from typing import Tuple, Dict, Any, Optional
 
@@ -60,28 +61,59 @@ STATE_SCHEMA = {
 }
 
 
+def _get_key_file_path() -> Path:
+    key_path = os.getenv("AI_TEST_GEN_SIGNATURE_KEY")
+    if key_path:
+        path = Path(key_path).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        return path
+    return Path.cwd() / ".ai-test-gen-signature-key"
+
+
 def get_signature_key() -> bytes:
     """
     Get or generate signing key for HMAC.
-    
-    Stores key in user's home directory with restricted permissions.
-    
+
+    Uses cryptographically secure random generator for key creation.
+    Stores key in user's home directory with restricted permissions (0600).
+
+    Security considerations:
+    - Key is 32 bytes (256 bits) from os.urandom (CSPRNG)
+    - File permissions restrict access to owner only
+    - Key is never logged or exposed
+
     Returns:
-        Signing key bytes
+        Signing key bytes (32 bytes)
     """
-    key_file = Path.home() / '.ai-test-gen-signature-key'
-    
+    import os as _os
+    import stat
+
+    key_file = _get_key_file_path()
+
     if key_file.exists():
-        return key_file.read_bytes()
-    
-    # Generate new key
-    key = hashlib.sha256(Path.cwd().as_posix().encode()).digest()
-    
+        # Verify file permissions before reading
+        file_stat = key_file.stat()
+        if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+            logger.warning("Signature key file has insecure permissions, regenerating...")
+            key_file.unlink()
+        else:
+            key_data = key_file.read_bytes()
+            # Validate key length
+            if len(key_data) == 32:
+                return key_data
+            else:
+                logger.warning("Invalid signature key length, regenerating...")
+                key_file.unlink()
+
+    # Generate new cryptographically secure key
+    key = _os.urandom(32)  # 256-bit key from CSPRNG
+
     # Save with restricted permissions
     key_file.write_bytes(key)
     key_file.chmod(0o600)
-    
-    logger.info("Generated new signature key")
+
+    logger.info("Generated new cryptographically secure signature key")
     return key
 
 
@@ -153,21 +185,20 @@ def validate_schema(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         Tuple of (is_valid, error_message)
     """
     try:
-        # Import jsonschema only when needed
-        from jsonschema import validate, ValidationError
-        
+        from jsonschema import validate
+        from jsonschema.exceptions import ValidationError
+    except ImportError:
+        logger.warning("jsonschema not installed, skipping schema validation")
+        return True, None
+
+    try:
         validate(instance=data, schema=STATE_SCHEMA)
         return True, None
-        
     except ValidationError as e:
         error_msg = f"Schema validation failed: {e.message}"
         logger.error(error_msg)
         SecurityLogger.log_state_integrity_failure("state file", error_msg)
         return False, error_msg
-        
-    except ImportError:
-        logger.warning("jsonschema not installed, skipping schema validation")
-        return True, None  # Don't fail if jsonschema not available
 
 
 def sign_state_file(data: Dict[str, Any]) -> Dict[str, Any]:

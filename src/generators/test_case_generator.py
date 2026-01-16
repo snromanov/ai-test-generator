@@ -12,6 +12,7 @@ from src.agents.test_agent import GenerationResult
 from src.generators.exporters import ExcelExporter, CSVExporter
 from src.state.state_manager import StateManager
 from src.utils.logger import setup_logger
+from src.utils.input_validation import validate_file_size, validate_file_path, validate_requirement_length
 
 logger = setup_logger(__name__)
 
@@ -75,6 +76,10 @@ class TestCaseGenerator:
         # Добавляем в state
         self.state.get_or_create_session()
         for req_text in requirements:
+            is_valid, error = validate_requirement_length(req_text)
+            if not is_valid:
+                logger.warning(f"Требование пропущено: {error}")
+                continue
             self.state.add_requirement(
                 text=req_text,
                 source="confluence",
@@ -93,7 +98,15 @@ class TestCaseGenerator:
         Returns:
             Список загруженных требований
         """
+        is_valid, error = validate_file_path(file_path, allow_absolute=True)
+        if not is_valid:
+            raise ValueError(f"Invalid file path: {error}")
+
         path = Path(file_path)
+        is_valid, error = validate_file_size(path)
+        if not is_valid:
+            raise ValueError(f"Invalid file: {error}")
+
         logger.info(f"Чтение требований из файла: {path}")
 
         with open(path, "r", encoding="utf-8") as f:
@@ -106,6 +119,10 @@ class TestCaseGenerator:
         # Добавляем в state
         self.state.get_or_create_session()
         for req_text in requirements:
+            is_valid, error = validate_requirement_length(req_text)
+            if not is_valid:
+                logger.warning(f"Требование пропущено: {error}")
+                continue
             self.state.add_requirement(
                 text=req_text,
                 source="file",
@@ -125,6 +142,10 @@ class TestCaseGenerator:
             Текст требования
         """
         logger.info("Загрузка требования из текста")
+
+        is_valid, error = validate_requirement_length(text)
+        if not is_valid:
+            raise ValueError(f"Invalid requirement: {error}")
 
         self.state.get_or_create_session()
         self.state.add_requirement(text=text, source="manual")

@@ -1,0 +1,50 @@
+@startuml
+title AI Test Generator - UML (Component)
+hide stereotypes
+
+package "Components" {
+  [main.py] as CLI
+  [qa_prompts.py] as PROMPTS
+  [TestCaseGenerator] as TCG
+  [StateManager] as SM
+  [TestGeneratorHelper] as TGH
+  [RequirementAnalyzer] as RA
+  [ConfluenceParser] as CP
+  [ExcelExporter/CSVExporter] as EXP
+  [security.py] as SEC
+  [ssrf_protection.py] as SSRF
+  [rate_limiter.py] as RL
+  [security_logging.py] as SL
+  database ".test_generator_state.json" as STATE
+  file "Excel/CSV" as OUT
+  cloud "Confluence API" as CONF
+  actor "CLI Agent" as AGENT
+}
+
+CLI --> TCG
+CLI --> SM
+CLI --> PROMPTS
+
+TCG --> CP
+TCG --> SM
+TCG --> EXP
+
+TGH --> SM
+RA --> TGH
+
+CP --> SSRF
+CP --> RL
+CP --> CONF
+
+SM --> SEC
+SM --> STATE
+
+EXP --> OUT
+
+SEC --> SL
+SSRF --> SL
+RL --> SL
+
+AGENT ..> PROMPTS
+AGENT ..> TGH
+@enduml

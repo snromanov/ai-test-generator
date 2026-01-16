@@ -32,12 +32,15 @@ htmlcov/
 
 # State files (опционально - можно закоммитить для совместной работы)
 .test_generator_state.json
+.test_generator_state.json.backup
+.ai-test-gen-signature-key
 
 # Output files
 output/
 exports/
 
 # Artifacts (generated files)
+artifacts/
 artifacts/*.xlsx
 artifacts/*.csv
 artifacts/*.png
