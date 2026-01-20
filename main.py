@@ -914,6 +914,27 @@ def state_note(text: str):
     click.echo(click.style("Заметка добавлена.", fg="green"))
 
 
+@state.command("feedback")
+@click.argument("req_id")
+@click.argument("text")
+def state_feedback(req_id: str, text: str):
+    """Добавляет замечание пользователя по требованию."""
+    sm = StateManager()
+    session = sm.load()
+
+    if not session:
+        click.echo(click.style("Сессия не найдена.", fg="red"))
+        return
+
+    req = sm.find_requirement_by_id(req_id)
+    if not req:
+        click.echo(click.style(f"Требование не найдено: {req_id}", fg="red"))
+        return
+
+    sm.add_requirement_feedback(req_id, text)
+    click.echo(click.style("Замечание добавлено.", fg="green"))
+
+
 @state.command("clear")
 @click.confirmation_option(prompt="Удалить состояние?")
 def state_clear():
@@ -1156,6 +1177,334 @@ def generate(
         logger.exception("Ошибка генерации")
         click.echo(click.style(f"\nОшибка: {e}", fg="red"))
         sys.exit(1)
+
+
+# =============================================================================
+# User-friendly short aliases
+# =============================================================================
+
+@cli.command("gen")
+@click.option("--source", "-s", default="raw", help="Источник: raw, demo/NAME, file.md")
+@click.option("--output", "-o", default="artifacts/test_cases", help="Путь экспорта")
+@click.option("--format", "-f", type=click.Choice(["excel", "csv", "both"]), default="both")
+@click.pass_context
+def gen(ctx, source: str, output: str, format: str):
+    """
+    Короткий алиас для generate.
+
+    Примеры:
+    \b
+      python main.py gen                    # из raw, excel+csv
+      python main.py gen -s demo/petstore   # из демо
+      python main.py gen -o my_tests        # в my_tests.xlsx
+    """
+    ctx.invoke(generate, source=source, output=output, format=format)
+
+
+@cli.command("show")
+@click.option("--format", "-f", type=click.Choice(["text", "json"]), default="text")
+@click.pass_context
+def show(ctx, format: str):
+    """Короткий алиас для state show."""
+    ctx.invoke(state_show, format=format)
+
+
+@cli.command("export")
+@click.option("--output", "-o", default="artifacts/test_cases", help="Путь экспорта")
+@click.option("--format", "-f", type=click.Choice(["excel", "csv", "both"]), default="both")
+@click.option("--group-by-layer", "-g", is_flag=True, default=True, help="Группировать по слоям")
+@click.pass_context
+def export_cmd(ctx, output: str, format: str, group_by_layer: bool):
+    """
+    Короткий алиас для state export.
+
+    Примеры:
+    \b
+      python main.py export                 # excel+csv в artifacts/
+      python main.py export -o my_tests     # в my_tests.xlsx/.csv
+      python main.py export -f excel        # только excel
+    """
+    ctx.invoke(state_export, output=output, format=format, group_by_layer=group_by_layer)
+
+
+@cli.command("stats")
+def stats():
+    """Показывает краткую статистику текущей сессии."""
+    sm = StateManager()
+    session = sm.load()
+
+    if not session:
+        click.echo(click.style("Сессия не найдена.", fg="yellow"))
+        click.echo("Запустите: python main.py gen")
+        return
+
+    total_reqs = len(session.requirements)
+    completed_reqs = sum(1 for r in session.requirements if r.status.value == 'completed')
+    total_tests = sum(len(r.test_cases) for r in session.requirements)
+
+    # Статистика по слоям
+    layer_counts = {}
+    for req in session.requirements:
+        for tc in req.test_cases:
+            layer = getattr(tc, 'layer', 'api') or 'api'
+            layer_counts[layer] = layer_counts.get(layer, 0) + 1
+
+    click.echo(click.style("\n📊 Статистика сессии\n", fg="cyan", bold=True))
+    click.echo(f"  Требований:  {click.style(str(total_reqs), fg='green', bold=True)} (завершено: {completed_reqs})")
+    click.echo(f"  Тест-кейсов: {click.style(str(total_tests), fg='green', bold=True)}")
+
+    if layer_counts:
+        click.echo("\n  По слоям:")
+        layer_colors = {'api': 'blue', 'ui': 'yellow', 'e2e': 'magenta', 'integration': 'cyan'}
+        for layer, count in sorted(layer_counts.items()):
+            color = layer_colors.get(layer, 'white')
+            click.echo(f"    {click.style(layer.upper(), fg=color)}: {count}")
+
+    click.echo()
+
+
+@cli.command("clean")
+@click.option("--yes", "-y", is_flag=True, help="Без подтверждения")
+def clean(yes: bool):
+    """Очищает state и artifacts (с бэкапом)."""
+    if not yes and not click.confirm("Очистить state и artifacts (бэкап будет создан)?"):
+        return
+
+    cleanup = Cleanup()
+    cleanup.prepare_for_new_generation(backup=True)
+    click.echo(click.style("✓ Очищено (бэкап создан)", fg="green"))
+
+
+# =============================================================================
+# Raw requirements shortcuts
+# =============================================================================
+
+@cli.command("raw")
+@click.argument("action", type=click.Choice(["list", "add", "edit", "cat"]), default="list")
+@click.argument("name", required=False)
+def raw_cmd(action: str, name: str):
+    """
+    Управление сырыми требованиями в requirements/raw.
+
+    Примеры:
+    \b
+      python main.py raw list              # список файлов
+      python main.py raw cat auth          # показать содержимое auth.md
+      python main.py raw add payment       # создать payment.md
+      python main.py raw edit auth         # открыть auth.md в редакторе
+    """
+    raw_dir = Path("requirements/raw")
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    if action == "list":
+        files = sorted(raw_dir.glob("*.md")) + sorted(raw_dir.glob("*.txt"))
+        if not files:
+            click.echo(click.style("Папка requirements/raw пуста", fg="yellow"))
+            click.echo("Создайте файл: python main.py raw add NAME")
+            return
+
+        click.echo(click.style("\n📁 requirements/raw:\n", fg="cyan", bold=True))
+        for f in files:
+            # Считаем требования в файле
+            content = f.read_text(encoding="utf-8")
+            req_count = content.count("## REQ-") or content.count("# REQ-") or 1
+            size_kb = f.stat().st_size / 1024
+            click.echo(f"  {click.style(f.name, fg='green')}  ({req_count} req, {size_kb:.1f} KB)")
+        click.echo()
+
+    elif action == "cat":
+        if not name:
+            click.echo(click.style("Укажите имя файла: python main.py raw cat NAME", fg="red"))
+            return
+
+        file_path = raw_dir / f"{name}.md"
+        if not file_path.exists():
+            file_path = raw_dir / name
+        if not file_path.exists():
+            click.echo(click.style(f"Файл не найден: {name}", fg="red"))
+            return
+
+        content = file_path.read_text(encoding="utf-8")
+        click.echo(click.style(f"\n--- {file_path.name} ---\n", fg="cyan"))
+        click.echo(content)
+        click.echo(click.style(f"\n--- end ---\n", fg="cyan"))
+
+    elif action == "add":
+        if not name:
+            click.echo(click.style("Укажите имя файла: python main.py raw add NAME", fg="red"))
+            return
+
+        file_path = raw_dir / f"{name}.md"
+        if file_path.exists():
+            click.echo(click.style(f"Файл уже существует: {file_path}", fg="yellow"))
+            return
+
+        template = f"""# {name.replace('_', ' ').title()} Requirements
+
+## REQ-001 [Back][Front] Название требования
+
+**Описание:**
+Описание функциональности.
+
+**Критерии приёмки:**
+- [ ] Критерий 1
+- [ ] Критерий 2
+
+**API:** `POST /api/v1/{name}`
+
+---
+
+## REQ-002 [Back] Ещё одно требование
+
+**Описание:**
+...
+
+"""
+        file_path.write_text(template, encoding="utf-8")
+        click.echo(click.style(f"✓ Создан: {file_path}", fg="green"))
+        click.echo(f"  Редактируйте: python main.py raw edit {name}")
+
+    elif action == "edit":
+        if not name:
+            click.echo(click.style("Укажите имя файла: python main.py raw edit NAME", fg="red"))
+            return
+
+        file_path = raw_dir / f"{name}.md"
+        if not file_path.exists():
+            file_path = raw_dir / name
+        if not file_path.exists():
+            click.echo(click.style(f"Файл не найден: {name}", fg="red"))
+            return
+
+        import os
+        editor = os.environ.get("EDITOR", "nano")
+        os.system(f"{editor} {file_path}")
+
+
+@cli.command("coverage")
+def coverage_cmd():
+    """Анализирует покрытие требований тестами."""
+    sm = StateManager()
+    session = sm.load()
+
+    if not session:
+        click.echo(click.style("Сессия не найдена. Запустите: python main.py gen", fg="yellow"))
+        return
+
+    click.echo(click.style("\n" + "=" * 70, fg="cyan"))
+    click.echo(click.style("📊 АНАЛИЗ ПОКРЫТИЯ ТРЕБОВАНИЙ", fg="cyan", bold=True))
+    click.echo(click.style("=" * 70, fg="cyan"))
+
+    total_reqs = len(session.requirements)
+    total_tests = 0
+    layer_counts = {'api': 0, 'ui': 0, 'e2e': 0, 'integration': 0}
+    technique_counts = {}
+
+    for req in session.requirements:
+        req_tests = len(req.test_cases)
+        total_tests += req_tests
+
+        # Извлекаем теги из текста
+        text = req.text.lower()
+        has_back = '[back]' in text
+        has_front = '[front]' in text
+
+        click.echo(f"\n{'─' * 70}")
+        status = "✅" if req.status.value == 'completed' else "⏳"
+        click.echo(f"{status} {click.style(req.id, fg='green', bold=True)}: {req_tests} тестов")
+
+        # Показываем текст требования (первые 100 символов)
+        short_text = req.text[:100].replace('\n', ' ')
+        click.echo(click.style(f"   {short_text}...", dim=True))
+
+        # Анализ тегов
+        tags_found = []
+        if has_back:
+            tags_found.append(click.style("[Back]", fg="blue"))
+        if has_front:
+            tags_found.append(click.style("[Front]", fg="yellow"))
+        if tags_found:
+            click.echo(f"   Теги: {' '.join(tags_found)}")
+
+        # Подсчёт по слоям и техникам
+        test_layers = {}
+        test_techniques = {}
+        for tc in req.test_cases:
+            layer = getattr(tc, 'layer', 'api') or 'api'
+            technique = getattr(tc, 'technique', 'unknown') or 'unknown'
+
+            layer_counts[layer] = layer_counts.get(layer, 0) + 1
+            test_layers[layer] = test_layers.get(layer, 0) + 1
+            test_techniques[technique] = test_techniques.get(technique, 0) + 1
+            technique_counts[technique] = technique_counts.get(technique, 0) + 1
+
+        # Показываем распределение по слоям для этого требования
+        if test_layers:
+            layers_str = ", ".join(f"{k.upper()}={v}" for k, v in sorted(test_layers.items()))
+            click.echo(f"   Слои: {layers_str}")
+
+        # Анализ gaps
+        gaps = []
+        if has_back and test_layers.get('api', 0) == 0:
+            gaps.append("❌ Нет API тестов (добавьте endpoint в требование)")
+        if has_front and test_layers.get('ui', 0) == 0:
+            gaps.append("❌ Нет UI тестов")
+        if has_back and has_front and test_layers.get('e2e', 0) == 0:
+            gaps.append("⚠️  Нет E2E тестов")
+
+        if gaps:
+            click.echo(click.style("   Gaps:", fg="red"))
+            for gap in gaps:
+                click.echo(f"      {gap}")
+
+    # Итоговая статистика
+    click.echo(f"\n{'=' * 70}")
+    click.echo(click.style("📈 ИТОГО", fg="cyan", bold=True))
+    click.echo(f"{'─' * 70}")
+    click.echo(f"   Требований:  {total_reqs}")
+    click.echo(f"   Тестов:      {total_tests}")
+    click.echo(f"   Среднее:     {total_tests / total_reqs:.1f} тестов/требование" if total_reqs else "")
+
+    click.echo(f"\n   По слоям:")
+    layer_colors = {'api': 'blue', 'ui': 'yellow', 'e2e': 'magenta', 'integration': 'cyan'}
+    for layer, count in sorted(layer_counts.items()):
+        if count > 0:
+            color = layer_colors.get(layer, 'white')
+            pct = (count / total_tests * 100) if total_tests else 0
+            bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+            layer_name = f"{layer.upper():12}"
+            click.echo(f"      {click.style(layer_name, fg=color)} {bar} {count:3} ({pct:.0f}%)")
+
+    click.echo(f"\n   По техникам:")
+    for technique, count in sorted(technique_counts.items(), key=lambda x: -x[1])[:8]:
+        pct = (count / total_tests * 100) if total_tests else 0
+        click.echo(f"      {technique:25} {count:3} ({pct:.0f}%)")
+
+    click.echo(click.style("\n" + "=" * 70 + "\n", fg="cyan"))
+
+
+@cli.command("ls")
+def ls_cmd():
+    """Показывает список файлов в requirements/raw."""
+    raw_dir = Path("requirements/raw")
+    if not raw_dir.exists():
+        click.echo(click.style("Папка requirements/raw не существует", fg="yellow"))
+        return
+
+    files = sorted(raw_dir.glob("*.md")) + sorted(raw_dir.glob("*.txt"))
+    if not files:
+        click.echo(click.style("Папка пуста", fg="yellow"))
+        return
+
+    click.echo(click.style("\n📁 requirements/raw:\n", fg="cyan", bold=True))
+    total_reqs = 0
+    for f in files:
+        content = f.read_text(encoding="utf-8")
+        req_count = content.count("## REQ-") or content.count("# REQ-") or 1
+        total_reqs += req_count
+        click.echo(f"  {click.style(f.name, fg='green', bold=True):30} {req_count:3} req")
+
+    click.echo(click.style(f"\n  Всего: {len(files)} файлов, ~{total_reqs} требований\n", dim=True))
 
 
 if __name__ == "__main__":

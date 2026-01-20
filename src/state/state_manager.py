@@ -97,6 +97,8 @@ class RequirementState:
     component: str = "fullstack"  # backend | frontend | fullstack
     tags: list[str] = field(default_factory=list)
     title: Optional[str] = None  # Заголовок требования (из парсера)
+    structured_text: Optional[str] = None  # Нормализованный текст для генерации
+    review_feedback: list[str] = field(default_factory=list)  # Замечания пользователя
 
     def __post_init__(self):
         if not self.hash:
@@ -442,6 +444,24 @@ class StateManager:
             )
             req.status = RequirementStatus.ANALYZED
             self.save()
+
+    def add_requirement_feedback(self, req_id: str, feedback: str):
+        """Сохраняет замечание пользователя по требованию."""
+        req = self.find_requirement_by_id(req_id)
+        if not req:
+            return
+        note = (feedback or "").strip()
+        if not note:
+            return
+        req.review_feedback.append(note)
+        self.save()
+
+    def get_requirement_feedback(self, req_id: str) -> list[str]:
+        """Возвращает список замечаний пользователя по требованию."""
+        req = self.find_requirement_by_id(req_id)
+        if not req:
+            return []
+        return list(req.review_feedback)
 
     # =========================================================================
     # Работа с тест-кейсами

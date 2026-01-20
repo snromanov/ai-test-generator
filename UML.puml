@@ -2,37 +2,69 @@
 title AI Test Generator - UML (Component)
 hide stereotypes
 
-package "Components" {
+package "Entry Points" {
   [main.py] as CLI
-  [TestAgent (models)] as AM
-  [Prompts (qa/ui/llm)] as PROMPTS
-  [TestCaseGenerator] as TCG
-  [StateManager] as SM
+  [generate_tests.py] as GT
+  [Makefile] as MK
+}
+
+package "Pipelines" {
+  [PipelineOrchestrator] as PO
+}
+
+package "Parsers" {
   [StructuredRequirementParser] as SRP
+  [ConfluenceParser] as CP
+}
+
+package "Generators" {
+  [TestCaseGenerator] as TCG
+  [Exporters (Excel/CSV)] as EXP
+}
+
+package "Prompts" {
+  [qa_prompts.py] as QA
+  [ui_prompts.py] as UI
+  [llm_integration_prompts.py] as LLM
+}
+
+package "State" {
+  [StateManager] as SM
+  database ".test_generator_state.json" as STATE
+  file ".ai-test-gen-signature-key" as SIG
+}
+
+package "Utils" {
   [TestGeneratorHelper] as TGH
   [RequirementAnalyzer] as RA
-  [PipelineOrchestrator] as PO
-  [ConfluenceParser] as CP
-  [Exporters (Excel/CSV)] as EXP
   [Cleanup] as CLN
   [ProjectInfo] as PI
   [InputValidation] as IV
   [Logger] as LOG
+}
+
+package "Security" {
   [security.py] as SEC
   [ssrf_protection.py] as SSRF
   [rate_limiter.py] as RL
   [state_integrity.py] as SI
   [security_logging.py] as SL
-  database ".test_generator_state.json" as STATE
-  file ".ai-test-gen-signature-key" as SIG
-  file "Excel/CSV" as OUT
-  cloud "Confluence API" as CONF
-  actor "CLI Agent" as AGENT
 }
 
-CLI --> TCG
+package "Models" {
+  [test_agent.py] as AM
+}
+
+file "artifacts/*.xlsx/.csv" as OUT
+cloud "Confluence API" as CONF
+actor "CLI Agent" as AGENT
+
+MK ..> GT
+GT --> CLI
+
+CLI --> PO
 CLI --> SM
-CLI --> PROMPTS
+CLI --> TCG
 CLI --> SRP
 CLI --> RA
 CLI --> TGH
@@ -40,7 +72,19 @@ CLI --> CLN
 CLI --> PI
 CLI --> IV
 CLI --> AM
-CLI --> PO
+CLI --> QA
+CLI --> UI
+CLI --> LLM
+
+PO --> CLN
+PO --> SM
+PO --> TGH
+PO --> RA
+PO --> TCG
+PO --> EXP
+PO --> SRP
+PO --> IV
+PO --> LOG
 
 TCG --> CP
 TCG --> SM
@@ -52,14 +96,7 @@ TGH --> SM
 TGH --> LOG
 RA --> TGH
 RA --> LOG
-PO --> CLN
-PO --> SM
-PO --> TGH
-PO --> RA
-PO --> TCG
-PO --> EXP
-PO --> IV
-PO --> LOG
+SRP --> LOG
 
 CP --> SSRF
 CP --> RL
@@ -79,6 +116,7 @@ EXP --> OUT
 EXP --> AM
 EXP --> LOG
 
+QA --> PI
 SEC --> SL
 SSRF --> SL
 RL --> SL
@@ -86,10 +124,8 @@ SI --> SL
 IV --> LOG
 CLN --> LOG
 PI --> LOG
-SRP --> LOG
 AM --> LOG
-PROMPTS --> PI
 
-AGENT ..> PROMPTS
+AGENT ..> QA
 AGENT ..> TGH
 @enduml

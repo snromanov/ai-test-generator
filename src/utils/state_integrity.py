@@ -43,6 +43,8 @@ STATE_SCHEMA = {
                     "component": {"type": "string", "enum": ["backend", "frontend", "fullstack"]},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "title": {"type": ["string", "null"]},
+                    "structured_text": {"type": ["string", "null"]},
+                    "review_feedback": {"type": "array", "items": {"type": "string"}},
                     "test_cases": {
                         "type": "array",
                         "items": {

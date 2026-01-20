@@ -1,0 +1,139 @@
+{
+  "option_a_hire_qa": {
+    "description": "Hire Infrastructure QA Engineer",
+    "recruitment_time_months": 6,
+    "onboarding_time_months": 3,
+    "total_time_to_productivity_months": 9,
+    "year_1": {
+      "salary_rub": 3600000,
+      "taxes_and_benefits_rub": 1080000,
+      "recruitment_cost_rub": 300000,
+      "total_rub": 4980000
+    },
+    "year_2": {
+      "salary_rub": 3960000,
+      "taxes_and_benefits_rub": 1188000,
+      "total_rub": 5148000
+    },
+    "year_3": {
+      "salary_rub": 4356000,
+      "taxes_and_benefits_rub": 1307000,
+      "total_rub": 5663000
+    },
+    "total_3_years_rub": 15791000,
+    "challenges": [
+      "Infrastructure QA - редкий специалист на рынке",
+      "6+ месяцев на поиск и найм",
+      "3 месяца на онбординг и погружение в системы",
+      "Риск ухода после обучения",
+      "Один человек не покрывает все направления"
+    ]
+  },
+  "option_b_ai_generator": {
+    "description": "AI Test Generator",
+    "development_status": "MVP Ready",
+    "time_to_value_weeks": 4,
+    "year_1": {
+      "anthropic_api_rub": 180000,
+      "infrastructure_rub": 60000,
+      "support_hours": 40,
+      "support_cost_rub": 120000,
+      "training_cost_rub": 50000,
+      "total_rub": 410000
+    },
+    "year_2": {
+      "anthropic_api_rub": 240000,
+      "infrastructure_rub": 72000,
+      "support_hours": 20,
+      "support_cost_rub": 60000,
+      "total_rub": 372000
+    },
+    "year_3": {
+      "anthropic_api_rub": 300000,
+      "infrastructure_rub": 84000,
+      "support_hours": 10,
+      "support_cost_rub": 30000,
+      "total_rub": 414000
+    },
+    "total_3_years_rub": 1196000,
+    "advantages": [
+      "Готов к использованию сегодня",
+      "On-premise - данные не покидают банк",
+      "Масштабируется без дополнительных затрат",
+      "5 минут vs 17 часов на генерацию",
+      "Консистентное качество тест-кейсов"
+    ]
+  },
+  "comparison": {
+    "savings_3_years_rub": 14595000,
+    "roi_percentage": 1221,
+    "time_to_value": {
+      "hire_qa_weeks": 36,
+      "ai_generator_weeks": 4,
+      "acceleration_factor": 9
+    },
+    "break_even_months": 1
+  },
+  "pilot_proposal": {
+    "duration_weeks": 4,
+    "cost_rub": 0,
+    "resources_needed": {
+      "engineers_part_time": 2,
+      "hours_per_week_per_engineer": 8
+    },
+    "week_1": {
+      "name": "Setup & Training",
+      "activities": [
+        "Настройка окружения",
+        "Обучение инженеров (2 часа)",
+        "Выбор первых требований для тестирования"
+      ]
+    },
+    "week_2": {
+      "name": "Generation Phase",
+      "activities": [
+        "Генерация 200-300 тест-кейсов",
+        "Ревью и приоритизация",
+        "Адаптация под специфику инфраструктуры"
+      ]
+    },
+    "week_3": {
+      "name": "Execution Phase",
+      "activities": [
+        "Выполнение приоритетных тест-кейсов",
+        "Документирование найденных багов",
+        "Цель: найти 5-10 реальных проблем"
+      ]
+    },
+    "week_4": {
+      "name": "Scale Planning",
+      "activities": [
+        "Анализ результатов пилота",
+        "Планирование масштабирования",
+        "Подготовка roadmap на 3-6 месяцев"
+      ]
+    },
+    "success_metrics": {
+      "test_cases_generated": 200,
+      "bugs_found": {"min": 5, "max": 10},
+      "incidents_during_pilot": 0,
+      "engineer_satisfaction_min": 8
+    }
+  },
+  "demo_results": {
+    "project": "PetStore API",
+    "input": {
+      "endpoints": 9,
+      "documentation_pages": 2
+    },
+    "output": {
+      "test_cases": 52,
+      "generation_time_minutes": 5
+    },
+    "manual_equivalent": {
+      "estimated_hours": 17,
+      "test_cases_per_hour": 3
+    },
+    "efficiency_gain_factor": 204
+  }
+}

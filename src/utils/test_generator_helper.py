@@ -69,11 +69,16 @@ class TestGeneratorHelper:
         technique: str,
         preconditions: List[str],
         steps: List[Dict[str, Any]],
-        expected_result: str
+        expected_result: str,
+        layer: str = "api",
+        component: str = "fullstack",
+        tags: List[str] = None,
+        ui_element: str = None,
+        api_endpoint: str = None
     ) -> TestCaseState:
         """
         Добавляет тест-кейс к требованию.
-        
+
         Args:
             req_id: ID требования
             tc_id: ID тест-кейса (например, TC-003-001)
@@ -84,7 +89,12 @@ class TestGeneratorHelper:
             preconditions: Список предусловий
             steps: Список шагов [{"step": 1, "action": "..."}]
             expected_result: Ожидаемый результат
-        
+            layer: Слой тестирования (api, ui, integration, e2e)
+            component: Компонент (backend, frontend, fullstack)
+            tags: Дополнительные теги
+            ui_element: UI элемент (для UI тестов)
+            api_endpoint: API эндпоинт (для API тестов)
+
         Returns:
             Созданный тест-кейс
         """
@@ -96,9 +106,14 @@ class TestGeneratorHelper:
             technique=technique,
             preconditions=preconditions,
             steps=steps,
-            expected_result=expected_result
+            expected_result=expected_result,
+            layer=layer,
+            component=component,
+            tags=tags or [],
+            ui_element=ui_element,
+            api_endpoint=api_endpoint
         )
-        
+
         return self.sm.add_test_case(req_id, tc)
     
     def add_test_cases_bulk(
@@ -108,14 +123,14 @@ class TestGeneratorHelper:
     ) -> int:
         """
         Массово добавляет тест-кейсы к требованию.
-        
+
         Args:
             req_id: ID требования
             test_cases: Список тест-кейсов в виде словарей
-        
+
         Returns:
             Количество добавленных тест-кейсов
-        
+
         Example:
             test_cases = [
                 {
@@ -126,7 +141,12 @@ class TestGeneratorHelper:
                     'technique': 'equivalence_partitioning',
                     'preconditions': ['API доступен'],
                     'steps': [{'step': 1, 'action': 'Отправить POST'}],
-                    'expected_result': '201 Created'
+                    'expected_result': '201 Created',
+                    'layer': 'api',           # optional
+                    'component': 'backend',   # optional
+                    'tags': ['crud'],         # optional
+                    'ui_element': None,       # optional
+                    'api_endpoint': '/api/v1' # optional
                 }
             ]
         """
@@ -141,10 +161,15 @@ class TestGeneratorHelper:
                 technique=tc_data['technique'],
                 preconditions=tc_data['preconditions'],
                 steps=tc_data['steps'],
-                expected_result=tc_data['expected_result']
+                expected_result=tc_data['expected_result'],
+                layer=tc_data.get('layer', 'api'),
+                component=tc_data.get('component', 'fullstack'),
+                tags=tc_data.get('tags', []),
+                ui_element=tc_data.get('ui_element'),
+                api_endpoint=tc_data.get('api_endpoint')
             )
             count += 1
-        
+
         logger.info(f"Добавлено {count} тест-кейсов для {req_id}")
         return count
     
@@ -177,11 +202,18 @@ class TestGeneratorHelper:
         ]
     
     def get_requirement_text(self, req_id: str) -> str:
-        """Возвращает полный текст требования."""
+        """Возвращает полный текст требования (структурированный, если есть)."""
         req = self.sm.find_requirement_by_id(req_id)
         if not req:
             raise ValueError(f"Требование {req_id} не найдено")
+        structured_text = getattr(req, "structured_text", None)
+        if structured_text:
+            return structured_text
         return req.text
+
+    def add_requirement_feedback(self, req_id: str, feedback: str):
+        """Добавляет замечание пользователя по требованию."""
+        self.sm.add_requirement_feedback(req_id, feedback)
     
     def get_statistics(self) -> Dict[str, Any]:
         """
@@ -982,6 +1014,44 @@ def create_file_upload_tests(
         },
     ]
 
+    # BVA тесты: 0 файлов (ниже минимума) и 1 файл (минимум)
+    test_cases.extend([
+        {
+            'id': f'{base_tc_id}-UPLOAD-BVA-001',
+            'title': 'Граничное значение: 0 файлов (ниже минимума)',
+            'priority': 'High',
+            'test_type': 'Negative',
+            'technique': 'BVA: Below Min',
+            'preconditions': preconditions,
+            'steps': [
+                {'step': 1, 'action': 'Открыть форму загрузки файлов'},
+                {'step': 2, 'action': 'Не выбирать файлы и нажать кнопку отправки'}
+            ],
+            'expected_result': '1. Форма не отправляется\\n2. Сообщение: "Выберите хотя бы один файл" или блокировка кнопки',
+            'layer': 'ui',
+            'component': 'frontend',
+            'tags': ['upload', 'boundary', 'bva', 'ui'],
+            'ui_element': ui_element
+        },
+        {
+            'id': f'{base_tc_id}-UPLOAD-BVA-002',
+            'title': 'Граничное значение: 1 файл (минимум)',
+            'priority': 'High',
+            'test_type': 'Boundary',
+            'technique': 'BVA: Min Boundary',
+            'preconditions': preconditions + [f'Подготовлен 1 файл формата {formats_str}{size_hint}'],
+            'steps': [
+                {'step': 1, 'action': 'Выбрать ровно 1 файл для загрузки'},
+                {'step': 2, 'action': 'Дождаться завершения загрузки'}
+            ],
+            'expected_result': '1. Файл успешно загружен\\n2. Отображается превью/имя файла',
+            'layer': 'ui',
+            'component': 'fullstack',
+            'tags': ['upload', 'boundary', 'bva', 'ui'],
+            'ui_element': ui_element
+        },
+    ])
+
     if max_files and max_files > 1:
         test_cases.extend([
             {
@@ -989,7 +1059,7 @@ def create_file_upload_tests(
                 'title': f'Успешная загрузка максимального количества файлов ({max_files})',
                 'priority': 'High',
                 'test_type': 'Boundary',
-                'technique': 'ui_file_upload',
+                'technique': 'BVA: Max Boundary',
                 'preconditions': preconditions + [
                     f'Подготовлены {max_files} файла(ов) формата {formats_str}{size_hint}'
                 ],
@@ -1000,7 +1070,7 @@ def create_file_upload_tests(
                 'expected_result': f'1. Загружены все {max_files} файлов\\n2. Отображаются все превью/имена',
                 'layer': 'ui',
                 'component': 'fullstack',
-                'tags': ['upload', 'boundary', 'ui'],
+                'tags': ['upload', 'boundary', 'bva', 'ui'],
                 'ui_element': ui_element
             },
             {
@@ -1008,7 +1078,7 @@ def create_file_upload_tests(
                 'title': f'Отклонение загрузки при превышении лимита файлов ({max_files + 1})',
                 'priority': 'High',
                 'test_type': 'Negative',
-                'technique': 'ui_file_upload',
+                'technique': 'BVA: Above Max',
                 'preconditions': preconditions + [
                     f'Подготовлены {max_files + 1} файлов формата {formats_str}{size_hint}'
                 ],
@@ -1019,7 +1089,7 @@ def create_file_upload_tests(
                 'expected_result': f'1. Загрузка отклонена или ограничена до {max_files} файлов\\n2. Сообщение о лимите количества файлов',
                 'layer': 'ui',
                 'component': 'frontend',
-                'tags': ['upload', 'validation', 'ui'],
+                'tags': ['upload', 'validation', 'bva', 'ui'],
                 'ui_element': ui_element
             },
         ])

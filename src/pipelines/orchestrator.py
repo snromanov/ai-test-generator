@@ -28,6 +28,10 @@ from src.utils.test_generator_helper import (
     create_file_upload_tests,
     create_calendar_tests,
     create_integration_test_case,
+    create_api_crud_test_suite,
+    create_state_transition_tests,
+    create_performance_tests,
+    create_validation_test_cases,
 )
 from src.utils.logger import setup_logger
 from src.utils.input_validation import validate_file_path, validate_file_size
@@ -55,6 +59,7 @@ class PipelineConfig:
     backup_artifacts: bool = True
     clean_state: bool = True  # Очистить state перед генерацией
     group_by_layer: bool = True  # Группировать тесты по слоям в экспорте
+    structure_requirements: bool = True  # Нормализовать требования перед генерацией
 
 
 @dataclass
@@ -103,11 +108,11 @@ class PipelineOrchestrator:
         """
         try:
             # Шаг 1: Подготовка
-            logger.info("Шаг 1/4: Подготовка проекта...")
+            logger.info("Шаг 1/5: Подготовка проекта...")
             self._prepare()
 
             # Шаг 2: Загрузка требований
-            logger.info("Шаг 2/4: Загрузка требований...")
+            logger.info("Шаг 2/5: Загрузка требований...")
             req_count, layer_stats, component_stats, skipped = self._load_requirements()
 
             if req_count == 0:
@@ -116,12 +121,17 @@ class PipelineOrchestrator:
                     error_message="Требования не найдены в источнике"
                 )
 
-            # Шаг 3: Генерация тестов
-            logger.info("Шаг 3/4: Генерация тест-кейсов...")
+            # Шаг 3: Структурирование требований
+            if self.config.structure_requirements:
+                logger.info("Шаг 3/5: Структурирование требований...")
+                self._structure_requirements()
+
+            # Шаг 4: Генерация тестов
+            logger.info("Шаг 4/5: Генерация тест-кейсов...")
             test_count = self._generate_tests()
 
-            # Шаг 4: Экспорт
-            logger.info("Шаг 4/4: Экспорт результатов...")
+            # Шаг 5: Экспорт
+            logger.info("Шаг 5/5: Экспорт результатов...")
             export_paths = self._export_results()
 
             return PipelineResult(
@@ -318,6 +328,28 @@ class PipelineOrchestrator:
         logger.info(f"Загружено {len(requirements)} требований из Confluence")
         return len(requirements), layer_stats, component_stats, 0
 
+    def _structure_requirements(self) -> int:
+        """Нормализует требования и заполняет метаданные для генерации."""
+        session = self.sm.load()
+        if not session:
+            return 0
+
+        parser = StructuredRequirementParser()
+        structured_count = 0
+
+        for req in session.requirements:
+            parsed = parser.parse(req.text, auto_detect=self.config.auto_detect)
+            req.title = parsed.title
+            req.layer = parsed.layer.value
+            req.component = parsed.component.value
+            req.tags = sorted(set(req.tags + parsed.tags))
+            req.structured_text = self._build_structured_text(parsed)
+            structured_count += 1
+
+        self.sm.save()
+        logger.info(f"Структурировано требований: {structured_count}")
+        return structured_count
+
     def _generate_tests(self) -> int:
         """
         Генерирует тест-кейсы для всех требований.
@@ -334,6 +366,7 @@ class PipelineOrchestrator:
         for req_info in pending_requirements:
             req_id = req_info["id"]
             req_text = self.helper.get_requirement_text(req_id)
+            req_obj = self.sm.find_requirement_by_id(req_id)
             
             logger.debug(f"Анализ требования {req_id}...")
             
@@ -343,6 +376,7 @@ class PipelineOrchestrator:
 
             base_tc_id = f"TC-{req_id.split('-')[1]}"
             text_lower = req_text.lower()
+            feedback_hints = self._extract_feedback_hints(req_obj)
 
             # Boundary Value Analysis
             for field, bounds in analysis.boundary_values.items():
@@ -434,11 +468,327 @@ class PipelineOrchestrator:
                 ]
                 total_added += self.helper.add_test_cases_bulk(req_id, llm_tests)
 
+            # Определяем теги слоёв
+            req_tags = getattr(req_obj, 'tags', []) or []
+            has_back = any(t.lower() in {'back', 'backend', 'api'} for t in req_tags) or '[back]' in text_lower
+            has_front = any(t.lower() in {'front', 'frontend', 'ui'} for t in req_tags) or '[front]' in text_lower
+
+            # API CRUD тесты для [Back] требований
+            if has_back and analysis.endpoint:
+                req_type = self._infer_crud_type(text_lower)
+                if req_type:
+                    api_tests = create_api_crud_test_suite(
+                        req_id=req_id,
+                        base_tc_id=base_tc_id,
+                        endpoint=analysis.endpoint,
+                        http_method=analysis.http_method or "POST",
+                        req_type=req_type,
+                        preconditions=['API сервер доступен', 'Пользователь авторизован'],
+                        sample_data={'id': 1, 'name': 'TestObject'}
+                    )
+                    total_added += self.helper.add_test_cases_bulk(req_id, api_tests)
+
+            # State Transition тесты
+            if analysis.states and len(analysis.states) > 1:
+                valid_transitions = self._infer_valid_transitions(analysis.states)
+                invalid_transitions = self._infer_invalid_transitions(analysis.states)
+                if valid_transitions or invalid_transitions:
+                    st_tests = create_state_transition_tests(
+                        req_id=req_id,
+                        base_tc_id=base_tc_id,
+                        endpoint=analysis.endpoint or "/api/v1/resource/{id}/status",
+                        http_method="PUT",
+                        valid_transitions=valid_transitions,
+                        invalid_transitions=invalid_transitions,
+                        preconditions=['API сервер доступен', 'Объект существует']
+                    )
+                    total_added += self.helper.add_test_cases_bulk(req_id, st_tests)
+
+            # Performance тесты
+            if analysis.endpoint and has_back:
+                max_response_time = self._extract_response_time(req_text)
+                perf_tests = create_performance_tests(
+                    req_id=req_id,
+                    base_tc_id=base_tc_id,
+                    endpoint=analysis.endpoint,
+                    http_method=analysis.http_method or "GET",
+                    max_response_time_ms=max_response_time,
+                    preconditions=['API сервер доступен', 'Система под нормальной нагрузкой']
+                )
+                total_added += self.helper.add_test_cases_bulk(req_id, perf_tests)
+
+            # E2E тесты для [Back]+[Front]
+            if has_back and has_front:
+                e2e_tests = self._create_e2e_tests(req_id, base_tc_id, analysis, text_lower)
+                total_added += self.helper.add_test_cases_bulk(req_id, e2e_tests)
+
+            # Validation тесты для форм
+            if 'ui_form' in analysis.suggested_techniques or has_front:
+                field_validations = self._extract_field_validations(req_text, analysis)
+                if field_validations:
+                    val_tests = create_validation_test_cases(
+                        req_id=req_id,
+                        base_tc_id=base_tc_id,
+                        endpoint=analysis.endpoint or "/api/v1/resource",
+                        http_method=analysis.http_method or "POST",
+                        fields_validation=field_validations,
+                        preconditions=['Форма открыта', 'Пользователь авторизован']
+                    )
+                    total_added += self.helper.add_test_cases_bulk(req_id, val_tests)
+
+            # Feedback-based heuristics
+            if feedback_hints.get("add_integration"):
+                integration_test = create_integration_test_case(
+                    base_tc_id=f"{base_tc_id}-FB-INT-001",
+                    title="Интеграционный сценарий по замечаниям",
+                    api_endpoint=analysis.endpoint or None,
+                    test_type="Positive",
+                    technique="feedback_integration",
+                    tags=["feedback", "integration"]
+                )
+                total_added += self.helper.add_test_cases_bulk(req_id, [integration_test])
+
             # Отмечаем требование как завершенное
             self.helper.mark_requirement_completed(req_id)
 
         logger.info(f"Сгенерировано {total_added} тест-кейсов")
         return total_added
+
+    @staticmethod
+    def _build_structured_text(parsed) -> str:
+        """Собирает нормализованный текст требования из распарсенных данных."""
+        lines = [parsed.title]
+        if parsed.description:
+            lines.append(parsed.description.strip())
+        if parsed.sub_requirements:
+            lines.append("Sub-requirements:")
+            lines.extend(f"- {item}" for item in parsed.sub_requirements)
+        if parsed.constraints:
+            lines.append("Constraints:")
+            lines.extend(f"- {item}" for item in parsed.constraints)
+        if parsed.technical_notes:
+            lines.append("Technical notes:")
+            lines.extend(f"- {item}" for item in parsed.technical_notes)
+        if parsed.api_endpoints:
+            lines.append("API endpoints:")
+            lines.extend(f"- {item}" for item in parsed.api_endpoints)
+        if parsed.ui_elements:
+            lines.append("UI elements:")
+            lines.extend(f"- {item}" for item in parsed.ui_elements)
+        return "\n".join(line for line in lines if line)
+
+    @staticmethod
+    def _extract_feedback_hints(req_obj) -> dict:
+        """Извлекает подсказки для генерации на основе замечаний."""
+        if not req_obj:
+            return {}
+        feedback_text = " ".join(getattr(req_obj, "review_feedback", []) or [])
+        if not feedback_text:
+            return {}
+        text = feedback_text.lower()
+        add_integration = any(token in text for token in ["интеграц", "integration", "e2e", "сквозн"])
+        if "backend" in text or "бек" in text or "api" in text:
+            if getattr(req_obj, "component", None) == "fullstack":
+                req_obj.component = "backend"
+            req_obj.layer = "api"
+        if "frontend" in text or "фронт" in text or "ui" in text:
+            if getattr(req_obj, "component", None) == "fullstack":
+                req_obj.component = "frontend"
+            req_obj.layer = "ui"
+        return {"add_integration": add_integration}
+
+    @staticmethod
+    def _infer_crud_type(text_lower: str) -> Optional[str]:
+        """Определяет тип CRUD операции из текста требования."""
+        create_keywords = ['создан', 'create', 'добавл', 'add', 'new', 'регистр', 'register']
+        read_keywords = ['получ', 'get', 'read', 'просмотр', 'view', 'показ', 'show', 'отобра', 'display']
+        update_keywords = ['обнов', 'update', 'изменен', 'edit', 'редакт', 'modify']
+        delete_keywords = ['удал', 'delete', 'remove']
+        search_keywords = ['поиск', 'search', 'найти', 'find', 'фильтр', 'filter']
+
+        if any(kw in text_lower for kw in create_keywords):
+            return 'create'
+        if any(kw in text_lower for kw in update_keywords):
+            return 'update'
+        if any(kw in text_lower for kw in delete_keywords):
+            return 'delete'
+        if any(kw in text_lower for kw in search_keywords):
+            return 'search'
+        if any(kw in text_lower for kw in read_keywords):
+            return 'read'
+        return None
+
+    @staticmethod
+    def _infer_valid_transitions(states: list[str]) -> list[tuple[str, str]]:
+        """
+        Выводит валидные переходы между состояниями.
+
+        Предполагает линейную последовательность состояний.
+        """
+        if len(states) < 2:
+            return []
+
+        transitions = []
+        for i in range(len(states) - 1):
+            transitions.append((states[i], states[i + 1]))
+        return transitions
+
+    @staticmethod
+    def _infer_invalid_transitions(states: list[str]) -> list[tuple[str, str]]:
+        """
+        Выводит невалидные переходы между состояниями.
+
+        Обратные переходы в линейной последовательности.
+        """
+        if len(states) < 2:
+            return []
+
+        transitions = []
+        # Обратные переходы невалидны
+        for i in range(len(states) - 1):
+            transitions.append((states[i + 1], states[i]))
+
+        # Пропуск состояний невалиден
+        if len(states) >= 3:
+            transitions.append((states[0], states[-1]))
+
+        return transitions
+
+    def _create_e2e_tests(
+        self,
+        req_id: str,
+        base_tc_id: str,
+        analysis,
+        text_lower: str
+    ) -> list[dict]:
+        """Создает E2E тесты для fullstack требований."""
+        e2e_tests = []
+
+        # Определяем сценарий на основе анализа
+        scenario_name = "полный пользовательский сценарий"
+        if "регистр" in text_lower or "register" in text_lower:
+            scenario_name = "регистрация пользователя"
+        elif "вход" in text_lower or "login" in text_lower:
+            scenario_name = "авторизация пользователя"
+        elif "создан" in text_lower or "create" in text_lower:
+            scenario_name = "создание объекта через UI и проверка в API"
+        elif "загрузк" in text_lower or "upload" in text_lower:
+            scenario_name = "загрузка файла через UI и проверка сохранения"
+
+        e2e_tests.append({
+            'id': f'{base_tc_id}-E2E-001',
+            'title': f'E2E: {scenario_name} (happy path)',
+            'priority': 'Critical',
+            'test_type': 'Positive',
+            'technique': 'e2e_testing',
+            'preconditions': [
+                'Система полностью доступна',
+                'Frontend и Backend работают',
+                'Тестовые данные подготовлены'
+            ],
+            'steps': [
+                {'step': 1, 'action': 'Открыть страницу в браузере'},
+                {'step': 2, 'action': 'Выполнить действия через UI'},
+                {'step': 3, 'action': 'Проверить результат в UI'},
+                {'step': 4, 'action': f'Проверить данные через API ({analysis.endpoint or "endpoint"})'},
+                {'step': 5, 'action': 'Проверить консистентность данных'}
+            ],
+            'expected_result': '1. UI отображает корректный результат\n2. API возвращает созданные/измененные данные\n3. Данные консистентны между UI и API',
+            'layer': 'e2e',
+            'component': 'fullstack',
+            'tags': ['e2e', 'integration', 'fullstack'],
+            'ui_element': None,
+            'api_endpoint': analysis.endpoint
+        })
+
+        e2e_tests.append({
+            'id': f'{base_tc_id}-E2E-002',
+            'title': f'E2E: {scenario_name} (error handling)',
+            'priority': 'High',
+            'test_type': 'Negative',
+            'technique': 'e2e_testing',
+            'preconditions': [
+                'Система полностью доступна',
+                'Frontend и Backend работают'
+            ],
+            'steps': [
+                {'step': 1, 'action': 'Открыть страницу в браузере'},
+                {'step': 2, 'action': 'Ввести невалидные данные через UI'},
+                {'step': 3, 'action': 'Проверить отображение ошибок в UI'},
+                {'step': 4, 'action': 'Проверить что данные НЕ сохранены через API'}
+            ],
+            'expected_result': '1. UI отображает понятное сообщение об ошибке\n2. API подтверждает отсутствие изменений\n3. Пользователь может исправить данные',
+            'layer': 'e2e',
+            'component': 'fullstack',
+            'tags': ['e2e', 'error-handling', 'fullstack'],
+            'ui_element': None,
+            'api_endpoint': analysis.endpoint
+        })
+
+        return e2e_tests
+
+    @staticmethod
+    def _extract_response_time(text: str) -> int:
+        """Извлекает максимальное время ответа из текста требования."""
+        import re
+
+        # Паттерны для поиска времени ответа
+        patterns = [
+            r'(\d+)\s*(?:мс|ms|millisecond)',
+            r'(\d+)\s*(?:сек|sec|second)',
+            r'(?:время ответа|response time)[^\d]*(\d+)',
+            r'(\d+)\s*(?:миллисекунд)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text.lower())
+            if match:
+                value = int(match.group(1))
+                if 'сек' in text.lower() or 'sec' in text.lower():
+                    return value * 1000
+                return value
+
+        # Значение по умолчанию
+        return 2000
+
+    @staticmethod
+    def _extract_field_validations(text: str, analysis) -> dict[str, str]:
+        """Извлекает правила валидации полей из текста и анализа."""
+        validations = {}
+
+        text_lower = text.lower()
+
+        # Ищем упоминания полей и их правил
+        field_patterns = {
+            'email': 'формат email (обязательное)',
+            'телефон': 'формат телефона',
+            'phone': 'формат телефона',
+            'пароль': 'минимум 8 символов (обязательное)',
+            'password': 'минимум 8 символов (обязательное)',
+            'имя': 'не пустое (обязательное)',
+            'name': 'не пустое (обязательное)',
+            'дата': 'корректный формат даты',
+            'date': 'корректный формат даты',
+            'url': 'валидный URL',
+            'сумма': 'положительное число',
+            'amount': 'положительное число',
+            'возраст': 'целое число от 0 до 150',
+            'age': 'целое число от 0 до 150',
+        }
+
+        for field, rule in field_patterns.items():
+            if field in text_lower:
+                validations[field] = rule
+
+        # Добавляем поля из анализа
+        if hasattr(analysis, 'inputs') and analysis.inputs:
+            for inp in analysis.inputs:
+                inp_lower = inp.lower()
+                for field, rule in field_patterns.items():
+                    if field in inp_lower and field not in validations:
+                        validations[field] = rule
+
+        return validations
 
     def _export_results(self) -> list[str]:
         """
