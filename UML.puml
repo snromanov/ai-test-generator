@@ -1,0 +1,85 @@
+@startuml
+title AI Test Generator - UML (Component)
+hide stereotypes
+
+package "Components" {
+  [main.py] as CLI
+  [TestAgent (models)] as AM
+  [Prompts (qa/ui/llm)] as PROMPTS
+  [TestCaseGenerator] as TCG
+  [StateManager] as SM
+  [StructuredRequirementParser] as SRP
+  [TestGeneratorHelper] as TGH
+  [RequirementAnalyzer] as RA
+  [ConfluenceParser] as CP
+  [Exporters (Excel/CSV)] as EXP
+  [Cleanup] as CLN
+  [ProjectInfo] as PI
+  [InputValidation] as IV
+  [Logger] as LOG
+  [security.py] as SEC
+  [ssrf_protection.py] as SSRF
+  [rate_limiter.py] as RL
+  [state_integrity.py] as SI
+  [security_logging.py] as SL
+  database ".test_generator_state.json" as STATE
+  file ".ai-test-gen-signature-key" as SIG
+  file "Excel/CSV" as OUT
+  cloud "Confluence API" as CONF
+  actor "CLI Agent" as AGENT
+}
+
+CLI --> TCG
+CLI --> SM
+CLI --> PROMPTS
+CLI --> SRP
+CLI --> RA
+CLI --> TGH
+CLI --> CLN
+CLI --> PI
+CLI --> IV
+CLI --> AM
+
+TCG --> CP
+TCG --> SM
+TCG --> EXP
+TCG --> IV
+TCG --> LOG
+
+TGH --> SM
+TGH --> LOG
+RA --> TGH
+RA --> LOG
+
+CP --> SSRF
+CP --> RL
+CP --> CONF
+CP --> SL
+CP --> LOG
+
+SM --> SEC
+SM --> SI
+SM --> IV
+SM --> STATE
+SM --> SIG
+SM --> SL
+SM --> LOG
+
+EXP --> OUT
+EXP --> AM
+EXP --> LOG
+
+SEC --> SL
+SSRF --> SL
+RL --> SL
+SI --> SL
+IV --> LOG
+CLN --> LOG
+PI --> LOG
+SRP --> LOG
+AM --> LOG
+PROMPTS --> PI
+
+AGENT ..> PROMPTS
+AGENT ..> TGH
+@enduml

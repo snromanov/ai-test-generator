@@ -1,0 +1,1030 @@
+#!/usr/bin/env python3
+"""
+AI Test Generator - CLI для работы с CLI агентами.
+
+Этот проект заточен под CLI агенты (Claude Code, Qwen Code, Cursor и др.),
+которые сами генерируют тесты на основе промптов и современных QA методологий.
+"""
+import sys
+from pathlib import Path
+
+import click
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from src.generators.test_case_generator import TestCaseGenerator
+from src.agents.test_agent import GenerationResult, TestCase, RequirementAnalysis
+from src.prompts.qa_prompts import get_cli_agent_prompt
+from src.state.state_manager import StateManager, RequirementStatus
+from src.parsers.structured_parser import StructuredRequirementParser, get_layer_display_name, get_component_display_name
+from src.utils.cleanup import Cleanup
+from src.utils.requirement_analyzer import RequirementAnalyzer
+from src.utils.test_generator_helper import (
+    TestGeneratorHelper,
+    create_boundary_test_cases,
+    create_equivalence_test_cases,
+    create_file_upload_tests,
+    create_calendar_tests,
+    create_integration_test_case,
+)
+from src.utils.project_info import ProjectInfo
+from src.utils.logger import setup_logger
+from src.utils.input_validation import (
+    validate_confluence_page_id,
+    validate_file_path,
+    validate_file_size,
+    validate_requirement_length,
+    validate_export_filename,
+)
+
+logger = setup_logger(__name__)
+
+
+def _load_raw_requirements(
+    dir_path: str,
+    auto_detect: bool,
+    sm: StateManager
+) -> tuple[int, dict, dict, int]:
+    is_valid, error = validate_file_path(dir_path, allow_absolute=True)
+    if not is_valid:
+        raise ValueError(f"Невалидный путь: {error}")
+
+    root = Path(dir_path)
+    if not root.exists() or not root.is_dir():
+        raise ValueError("Папка не найдена")
+
+    files = [
+        p for p in root.iterdir()
+        if p.is_file()
+        and p.suffix.lower() in {".md", ".txt"}
+        and p.name.lower() != "readme.md"
+    ]
+    if not files:
+        raise ValueError("В папке нет файлов .md/.txt")
+
+    parser = StructuredRequirementParser()
+    total_requirements = 0
+    layer_stats = {}
+    component_stats = {}
+    skipped_files = 0
+
+    for file_path in sorted(files):
+        is_valid, error = validate_file_size(file_path)
+        if not is_valid:
+            skipped_files += 1
+            continue
+
+        content = file_path.read_text(encoding="utf-8")
+        parsed_requirements = parser.parse_multiple(content, auto_detect=auto_detect)
+
+        for parsed in parsed_requirements:
+            req = sm.add_requirement(
+                text=parsed.raw_text or parsed.description,
+                source="file",
+                source_ref=str(file_path)
+            )
+
+            req_obj = sm.find_requirement_by_id(req.id)
+            if req_obj:
+                req_obj.layer = parsed.layer.value
+                req_obj.component = parsed.component.value
+                req_obj.tags = parsed.tags
+                req_obj.title = parsed.title
+
+            layer_name = parsed.layer.value
+            component_name = parsed.component.value
+            layer_stats[layer_name] = layer_stats.get(layer_name, 0) + 1
+            component_stats[component_name] = component_stats.get(component_name, 0) + 1
+            total_requirements += 1
+
+    sm.save()
+    return total_requirements, layer_stats, component_stats, skipped_files
+
+
+def _extract_max_files(boundary_values: dict) -> int | None:
+    for field, bounds in boundary_values.items():
+        if bounds.get("type") == "count" and isinstance(bounds.get("max"), int):
+            return bounds["max"]
+        if field.lower() in {"фото", "photo", "photos", "файлы", "files", "file"}:
+            if isinstance(bounds.get("max"), int):
+                return bounds["max"]
+    return None
+
+
+def _prepare_tests_from_state() -> int:
+    helper = TestGeneratorHelper()
+    analyzer = RequirementAnalyzer()
+    total_added = 0
+
+    for req_info in helper.get_pending_requirements():
+        req_id = req_info["id"]
+        req_text = helper.get_requirement_text(req_id)
+        analysis = analyzer.analyze(req_text, req_id)
+        helper.add_analysis(req_id=req_id, **analyzer.to_helper_format(analysis))
+
+        base_tc_id = f"TC-{req_id.split('-')[1]}"
+        text_lower = req_text.lower()
+
+        for field, bounds in analysis.boundary_values.items():
+            min_val = bounds.get("min")
+            max_val = bounds.get("max")
+            if isinstance(min_val, int) and isinstance(max_val, int) and min_val <= max_val:
+                bva_tests = create_boundary_test_cases(
+                    req_id=req_id,
+                    base_tc_id=f"{base_tc_id}-{field.upper()}",
+                    field_name=field,
+                    min_value=min_val,
+                    max_value=max_val,
+                    valid_example=(min_val + max_val) // 2,
+                    invalid_low=min_val - 1,
+                    invalid_high=max_val + 1,
+                    endpoint=analysis.endpoint or "N/A"
+                )
+                total_added += helper.add_test_cases_bulk(req_id, bva_tests)
+
+        for field, classes in analysis.equivalence_classes.items():
+            valid_values = classes.get("valid", [])
+            invalid_values = classes.get("invalid", [])
+            if valid_values or invalid_values:
+                ep_tests = create_equivalence_test_cases(
+                    req_id=req_id,
+                    base_tc_id=f"{base_tc_id}-{field.upper()}",
+                    field_name=field,
+                    valid_values=valid_values,
+                    invalid_values=invalid_values,
+                    endpoint=analysis.endpoint or "N/A"
+                )
+                total_added += helper.add_test_cases_bulk(req_id, ep_tests)
+
+        if "календар" in text_lower or "calendar" in text_lower:
+            calendar_tests = create_calendar_tests(
+                req_id=req_id,
+                base_tc_id=base_tc_id,
+                ui_element="calendar"
+            )
+            total_added += helper.add_test_cases_bulk(req_id, calendar_tests)
+
+        if any(token in text_lower for token in ["фото", "файл", "upload", "photo", "file"]):
+            max_files = _extract_max_files(analysis.boundary_values)
+            if max_files is None and ("нескольк" in text_lower or "multiple" in text_lower):
+                max_files = 10
+            if max_files:
+                upload_tests = create_file_upload_tests(
+                    req_id=req_id,
+                    base_tc_id=base_tc_id,
+                    allowed_formats=["jpg", "png"],
+                    max_size_mb=10,
+                    max_files=max_files,
+                    ui_element="photo-upload"
+                )
+                total_added += helper.add_test_cases_bulk(req_id, upload_tests)
+
+        if any(token in text_lower for token in ["llm", "ai", "ии"]):
+            llm_tests = [
+                create_integration_test_case(
+                    base_tc_id=f"{base_tc_id}-LLM-001",
+                    title="Получение тега от LLM при модерации идеи",
+                    test_type="Positive",
+                    technique="llm_integration",
+                    tags=["llm", "integration"]
+                ),
+                create_integration_test_case(
+                    base_tc_id=f"{base_tc_id}-LLM-002",
+                    title="Некорректный ответ LLM → модерация без тегов",
+                    test_type="Negative",
+                    technique="llm_integration",
+                    tags=["llm", "validation"]
+                ),
+                create_integration_test_case(
+                    base_tc_id=f"{base_tc_id}-LLM-003",
+                    title="Таймаут LLM → модерация без тегов",
+                    test_type="Performance",
+                    technique="llm_integration",
+                    tags=["llm", "timeout"]
+                ),
+            ]
+            total_added += helper.add_test_cases_bulk(req_id, llm_tests)
+
+    return total_added
+
+
+def _compute_layer_component_stats(session) -> tuple[dict, dict]:
+    layer_stats: dict[str, int] = {}
+    component_stats: dict[str, int] = {}
+    for req in session.requirements:
+        layer = getattr(req, "layer", "api") or "api"
+        component = getattr(req, "component", "fullstack") or "fullstack"
+        layer_stats[layer] = layer_stats.get(layer, 0) + 1
+        component_stats[component] = component_stats.get(component, 0) + 1
+    return layer_stats, component_stats
+
+
+def _resolve_demo_file(name: str | None) -> Path | None:
+    demo_dir = Path("demo")
+    if not demo_dir.exists():
+        click.echo(click.style("Директория demo не найдена", fg="red"))
+        return None
+
+    demos = list(demo_dir.glob("*.md"))
+    if not demos:
+        click.echo(click.style("Демо-файлы не найдены", fg="yellow"))
+        return None
+
+    if not name:
+        click.echo("\nДоступные демо-требования:")
+        for i, demo in enumerate(demos, 1):
+            click.echo(f"  {i}. {demo.stem}")
+
+        choice = click.prompt("\nВыберите номер или введите имя", type=str)
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(demos):
+                return demos[idx]
+            click.echo("Неверный номер")
+            return None
+        except ValueError:
+            selected = demo_dir / f"{choice}.md"
+            if not selected.exists():
+                click.echo(f"Файл {selected} не найден")
+                return None
+            return selected
+
+    selected = demo_dir / f"{name}.md"
+    if not selected.exists():
+        selected = demo_dir / name
+        if not selected.exists():
+            click.echo(f"Демо {name} не найдено")
+            return None
+    return selected
+
+
+def _run_raw_pipeline(
+    dir_path: str,
+    auto_detect: bool,
+    no_backup: bool,
+    agent_type: str | None,
+    confirm: bool
+) -> tuple[int, int, dict, dict, int] | None:
+    if confirm and not click.confirm("Будут удалены state/кэш и очищены artifacts. Продолжить?"):
+        click.echo("Операция отменена.")
+        return None
+
+    cleanup = Cleanup()
+    cleanup.prepare_for_new_generation(backup=not no_backup)
+
+    sm = StateManager()
+    sm.create_session(agent_type=agent_type)
+
+    total_requirements, layer_stats, component_stats, skipped_files = _load_raw_requirements(
+        dir_path, auto_detect, sm
+    )
+    total_tests = _prepare_tests_from_state()
+    return total_requirements, total_tests, layer_stats, component_stats, skipped_files
+
+
+def _run_demo_pipeline(
+    name: str | None,
+    no_backup: bool,
+    agent_type: str | None,
+    confirm: bool
+) -> tuple[int, int, dict, dict, int] | None:
+    if confirm and not click.confirm("Будут удалены state/кэш и очищены artifacts. Продолжить?"):
+        click.echo("Операция отменена.")
+        return None
+
+    selected = _resolve_demo_file(name)
+    if selected is None:
+        return None
+
+    cleanup = Cleanup()
+    cleanup.prepare_for_new_generation(backup=not no_backup)
+
+    sm = StateManager()
+    sm.create_session(agent_type=agent_type)
+
+    is_valid, error = validate_file_size(selected)
+    if not is_valid:
+        click.echo(click.style(f"Невалидный файл: {error}", fg="red"))
+        return None
+
+    generator = TestCaseGenerator(state_manager=sm)
+    requirements = generator.load_from_file(str(selected))
+
+    if not requirements:
+        click.echo(click.style("Требования не найдены", fg="yellow"))
+        return None
+
+    total_tests = _prepare_tests_from_state()
+    session = sm.load()
+    if session is None:
+        click.echo(click.style("Сессия не найдена после загрузки", fg="red"))
+        return None
+
+    layer_stats, component_stats = _compute_layer_component_stats(session)
+    return len(requirements), total_tests, layer_stats, component_stats, 0
+
+
+def _print_raw_pipeline_summary(
+    total_requirements: int,
+    total_tests: int,
+    layer_stats: dict,
+    component_stats: dict,
+    skipped_files: int
+):
+    click.echo(click.style(f"\nЗагружено {total_requirements} требований", fg="green"))
+    click.echo(click.style(f"Подготовлено тест-кейсов: {total_tests}", fg="green"))
+    if skipped_files:
+        click.echo(click.style(f"Пропущено файлов: {skipped_files}", fg="yellow"))
+
+    click.echo("\nСтатистика по слоям:")
+    for layer, count in sorted(layer_stats.items()):
+        display_name = get_layer_display_name(layer) if hasattr(layer, 'value') else layer.upper()
+        click.echo(f"  {display_name}: {count}")
+
+    click.echo("\nСтатистика по компонентам:")
+    for component, count in sorted(component_stats.items()):
+        color = {"backend": "blue", "frontend": "yellow", "fullstack": "green"}.get(component, "white")
+        click.echo(f"  {click.style(component.capitalize(), fg=color)}: {count}")
+
+    click.echo("\nТеперь вы можете:")
+    click.echo("  python main.py state show")
+    click.echo("  python main.py state export -f excel --group-by-layer")
+
+
+@click.group()
+@click.version_option(version="1.0.0")
+def cli():
+    """AI Test Generator - генерация тест-кейсов через CLI агентов."""
+    pass
+
+
+# =============================================================================
+# Команды загрузки требований
+# =============================================================================
+
+@cli.command("load-confluence")
+@click.argument("page_id")
+def load_confluence(page_id: str):
+    """Загружает требования из Confluence в state."""
+    click.echo(f"Загрузка страницы Confluence: {page_id}")
+
+    try:
+        is_valid, error = validate_confluence_page_id(page_id)
+        if not is_valid:
+            click.echo(click.style(f"Невалидный ID страницы: {error}", fg="red"))
+            return
+
+        generator = TestCaseGenerator()
+        requirements = generator.load_from_confluence(page_id)
+
+        if not requirements:
+            click.echo(click.style("Требования не найдены на странице", fg="yellow"))
+            return
+
+        click.echo(click.style(f"Загружено {len(requirements)} требований", fg="green"))
+        click.echo("\nТеперь CLI агент может сгенерировать тесты:")
+        click.echo("  python main.py state show")
+
+    except Exception as e:
+        logger.exception("Ошибка загрузки")
+        click.echo(f"Ошибка: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("load-file")
+@click.argument("file_path", type=click.Path(exists=True))
+def load_file(file_path: str):
+    """Загружает требования из файла в state."""
+    click.echo(f"Чтение файла: {file_path}")
+
+    try:
+        is_valid, error = validate_file_path(file_path, allow_absolute=True)
+        if not is_valid:
+            click.echo(click.style(f"Невалидный путь: {error}", fg="red"))
+            return
+        is_valid, error = validate_file_size(Path(file_path))
+        if not is_valid:
+            click.echo(click.style(f"Невалидный файл: {error}", fg="red"))
+            return
+
+        generator = TestCaseGenerator()
+        requirements = generator.load_from_file(file_path)
+
+        if not requirements:
+            click.echo(click.style("Требования не найдены в файле", fg="yellow"))
+            return
+
+        click.echo(click.style(f"Загружено {len(requirements)} требований", fg="green"))
+        click.echo("\nТеперь CLI агент может сгенерировать тесты:")
+        click.echo("  python main.py state show")
+
+    except Exception as e:
+        logger.exception("Ошибка загрузки")
+        click.echo(f"Ошибка: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("load-demo")
+@click.option("--name", "-n", help="Имя демо-файла (например, petstore)")
+def load_demo(name: str):
+    """Загружает демонстрационные требования."""
+    selected = _resolve_demo_file(name)
+    if selected is None:
+        return
+
+    click.echo(f"Загрузка демо-требований: {selected.name}")
+    
+    try:
+        is_valid, error = validate_file_size(selected)
+        if not is_valid:
+            click.echo(click.style(f"Невалидный файл: {error}", fg="red"))
+            return
+
+        generator = TestCaseGenerator()
+        requirements = generator.load_from_file(str(selected))
+
+        if not requirements:
+            click.echo(click.style("Требования не найдены", fg="yellow"))
+            return
+
+        click.echo(click.style(f"Загружено {len(requirements)} демо-требований", fg="green"))
+        click.echo("\nТеперь вы можете просмотреть их:")
+        click.echo("  python main.py state show")
+
+    except Exception as e:
+        logger.exception("Ошибка загрузки демо")
+        click.echo(f"Ошибка: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("load-structured")
+@click.argument("file_path", type=click.Path(exists=True))
+@click.option("--auto-detect/--no-auto-detect", default=True,
+              help="Автоматически определять layer/component по ключевым словам")
+def load_structured(file_path: str, auto_detect: bool):
+    """Загружает структурированные требования с тегами [Back]/[Front]/[API]/[UI]."""
+    click.echo(f"Загрузка структурированных требований: {file_path}")
+
+    try:
+        is_valid, error = validate_file_path(file_path, allow_absolute=True)
+        if not is_valid:
+            click.echo(click.style(f"Невалидный путь: {error}", fg="red"))
+            return
+        is_valid, error = validate_file_size(Path(file_path))
+        if not is_valid:
+            click.echo(click.style(f"Невалидный файл: {error}", fg="red"))
+            return
+
+        # Читаем файл
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Парсим структурированные требования
+        parser = StructuredRequirementParser()
+        parsed_requirements = parser.parse_multiple(content)
+
+        if not parsed_requirements:
+            click.echo(click.style("Требования не найдены в файле", fg="yellow"))
+            return
+
+        # Создаем или загружаем сессию
+        sm = StateManager()
+        session = sm.get_or_create_session(agent_type="cli_agent")
+
+        # Статистика по слоям и компонентам
+        layer_stats = {}
+        component_stats = {}
+
+        # Добавляем требования в state с расширенными метаданными
+        for parsed in parsed_requirements:
+            req = sm.add_requirement(
+                text=parsed.raw_text or parsed.description,
+                source="file",
+                source_ref=file_path
+            )
+
+            # Обновляем расширенные поля
+            req_obj = sm.find_requirement_by_id(req.id)
+            if req_obj:
+                req_obj.layer = parsed.layer.value
+                req_obj.component = parsed.component.value
+                req_obj.tags = parsed.tags
+                req_obj.title = parsed.title
+
+            # Собираем статистику
+            layer_name = parsed.layer.value
+            component_name = parsed.component.value
+            layer_stats[layer_name] = layer_stats.get(layer_name, 0) + 1
+            component_stats[component_name] = component_stats.get(component_name, 0) + 1
+
+        sm.save()
+
+        # Выводим результат
+        click.echo(click.style(f"\nЗагружено {len(parsed_requirements)} требований", fg="green"))
+
+        click.echo("\nСтатистика по слоям:")
+        for layer, count in sorted(layer_stats.items()):
+            display_name = get_layer_display_name(layer) if hasattr(layer, 'value') else layer.upper()
+            click.echo(f"  {display_name}: {count}")
+
+        click.echo("\nСтатистика по компонентам:")
+        for component, count in sorted(component_stats.items()):
+            color = {"backend": "blue", "frontend": "yellow", "fullstack": "green"}.get(component, "white")
+            click.echo(f"  {click.style(component.capitalize(), fg=color)}: {count}")
+
+        click.echo("\nТеперь вы можете:")
+        click.echo("  python main.py state show")
+        click.echo("  python main.py state export -f excel --group-by-layer")
+
+    except Exception as e:
+        logger.exception("Ошибка загрузки структурированных требований")
+        click.echo(f"Ошибка: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("load-raw")
+@click.option("--dir", "dir_path", default="requirements/raw",
+              help="Папка с сырыми требованиями (.md/.txt)")
+@click.option("--auto-detect/--no-auto-detect", default=True,
+              help="Автоматически определять layer/component по ключевым словам")
+def load_raw(dir_path: str, auto_detect: bool):
+    """Загружает сырые требования из папки requirements/raw."""
+    click.echo(f"Загрузка сырых требований из: {dir_path}")
+
+    try:
+        sm = StateManager()
+        sm.get_or_create_session(agent_type="cli_agent")
+        total_requirements, layer_stats, component_stats, skipped_files = _load_raw_requirements(
+            dir_path, auto_detect, sm
+        )
+
+        if total_requirements == 0:
+            click.echo(click.style("Требования не найдены", fg="yellow"))
+            return
+
+        click.echo(click.style(f"\nЗагружено {total_requirements} требований", fg="green"))
+        if skipped_files:
+            click.echo(click.style(f"Пропущено файлов: {skipped_files}", fg="yellow"))
+
+        click.echo("\nСтатистика по слоям:")
+        for layer, count in sorted(layer_stats.items()):
+            display_name = get_layer_display_name(layer) if hasattr(layer, 'value') else layer.upper()
+            click.echo(f"  {display_name}: {count}")
+
+        click.echo("\nСтатистика по компонентам:")
+        for component, count in sorted(component_stats.items()):
+            color = {"backend": "blue", "frontend": "yellow", "fullstack": "green"}.get(component, "white")
+            click.echo(f"  {click.style(component.capitalize(), fg=color)}: {count}")
+
+        click.echo("\nТеперь вы можете:")
+        click.echo("  python main.py state show")
+        click.echo("  python main.py state export -f excel --group-by-layer")
+
+    except Exception as e:
+        logger.exception("Ошибка загрузки сырых требований")
+        click.echo(f"Ошибка: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("rebuild-raw")
+@click.option("--dir", "dir_path", default="requirements/raw",
+              help="Папка с сырыми требованиями (.md/.txt)")
+@click.option("--auto-detect/--no-auto-detect", default=True,
+              help="Автоматически определять layer/component по ключевым словам")
+@click.option("--no-backup", is_flag=True, help="Не делать бэкап artifacts")
+@click.option("--agent", "-a", type=str, default="local_agent",
+              help="Имя локального агента (например: codex, qwen, claude)")
+def rebuild_raw(dir_path: str, auto_detect: bool, no_backup: bool, agent: str):
+    """Очищает проект, загружает сырые требования и готовит тесты."""
+    try:
+        result = _run_raw_pipeline(
+            dir_path=dir_path,
+            auto_detect=auto_detect,
+            no_backup=no_backup,
+            agent_type=agent,
+            confirm=True
+        )
+        if result is None:
+            return
+        total_requirements, total_tests, layer_stats, component_stats, skipped_files = result
+
+        _print_raw_pipeline_summary(
+            total_requirements=total_requirements,
+            total_tests=total_tests,
+            layer_stats=layer_stats,
+            component_stats=component_stats,
+            skipped_files=skipped_files
+        )
+
+    except Exception as e:
+        logger.exception("Ошибка rebuild-raw")
+        click.echo(f"Ошибка: {e}", err=True)
+        sys.exit(1)
+
+
+# =============================================================================
+# Информационные команды
+# =============================================================================
+
+@cli.command()
+def techniques():
+    """Показывает доступные техники тест-дизайна."""
+    click.echo("\nДоступные техники тест-дизайна:\n")
+
+    click.echo(click.style("== Базовые техники ==", fg="cyan", bold=True))
+    techniques_info = [
+        ("equivalence_partitioning", "Эквивалентное разбиение",
+         "Разделение входных данных на классы эквивалентности"),
+        ("boundary_value", "Анализ граничных значений",
+         "Тестирование значений на границах диапазонов"),
+        ("decision_table", "Таблицы решений",
+         "Тестирование комбинаций условий и действий"),
+        ("state_transition", "Переходы состояний",
+         "Тестирование переходов между состояниями системы"),
+        ("use_case", "Варианты использования",
+         "Тестирование сценариев использования"),
+        ("pairwise", "Попарное тестирование",
+         "Минимальный набор тестов для покрытия пар значений"),
+        ("error_guessing", "Предугадывание ошибок",
+         "Тесты на основе типичных ошибок и опыта")
+    ]
+
+    for tech_id, name, description in techniques_info:
+        click.echo(f"  {click.style(tech_id, fg='green', bold=True)}")
+        click.echo(f"    {name}")
+        click.echo(f"    {click.style(description, dim=True)}")
+        click.echo()
+
+    click.echo(click.style("== UI техники ==", fg="cyan", bold=True))
+    ui_techniques = [
+        ("ui_calendar", "Тестирование календарей",
+         "Выбор дат, навигация, граничные значения, диапазоны"),
+        ("ui_form", "Тестирование форм",
+         "Валидация полей, состояния, submit, автосохранение"),
+        ("ui_file_upload", "Загрузка файлов",
+         "Drag-drop, форматы, размеры, прогресс, превью"),
+    ]
+
+    for tech_id, name, description in ui_techniques:
+        click.echo(f"  {click.style(tech_id, fg='yellow', bold=True)}")
+        click.echo(f"    {name}")
+        click.echo(f"    {click.style(description, dim=True)}")
+        click.echo()
+
+    click.echo(click.style("== Интеграционные техники ==", fg="cyan", bold=True))
+    integration_techniques = [
+        ("llm_integration", "LLM интеграции",
+         "Schema validation, timeout, injection protection, качество"),
+        ("backend_frontend_integration", "Backend-Frontend",
+         "API contract, data flow, error propagation, auth"),
+    ]
+
+    for tech_id, name, description in integration_techniques:
+        click.echo(f"  {click.style(tech_id, fg='magenta', bold=True)}")
+        click.echo(f"    {name}")
+        click.echo(f"    {click.style(description, dim=True)}")
+        click.echo()
+
+
+@cli.command("agent-prompt")
+@click.option("--save", "-s", type=click.Path(), help="Сохранить промпт в файл")
+def agent_prompt(save: str):
+    """Показывает промпт для CLI агента."""
+    prompt = get_cli_agent_prompt()
+
+    if save:
+        with open(save, "w", encoding="utf-8") as f:
+            f.write(prompt)
+        click.echo(f"Промпт сохранен в: {click.style(save, fg='green')}")
+        return
+
+    click.echo(click.style("\n=== ПРОМПТ ДЛЯ CLI АГЕНТА ===\n", fg='cyan', bold=True))
+    click.echo(prompt)
+    click.echo(click.style("\n=== КОНЕЦ ПРОМПТА ===\n", fg='cyan', bold=True))
+
+
+@cli.group("agent")
+def agent_group():
+    """Команды локального агента."""
+    pass
+
+
+@agent_group.command("pipeline-raw")
+@click.option("--agent", "-a", type=str, default="local_agent",
+              help="Имя локального агента (например: codex, qwen, claude)")
+@click.option("--dir", "dir_path", default="requirements/raw",
+              help="Папка с сырыми требованиями (.md/.txt)")
+@click.option("--auto-detect/--no-auto-detect", default=True,
+              help="Автоматически определять layer/component по ключевым словам")
+@click.option("--no-backup", is_flag=True, help="Не делать бэкап artifacts")
+@click.option("--yes", is_flag=True, help="Не спрашивать подтверждение")
+def agent_pipeline_raw(
+    agent: str,
+    dir_path: str,
+    auto_detect: bool,
+    no_backup: bool,
+    yes: bool
+):
+    """Запускает полный pipeline: очистка -> raw -> автогенерация тестов."""
+    try:
+        result = _run_raw_pipeline(
+            dir_path=dir_path,
+            auto_detect=auto_detect,
+            no_backup=no_backup,
+            agent_type=agent,
+            confirm=not yes
+        )
+        if result is None:
+            return
+        total_requirements, total_tests, layer_stats, component_stats, skipped_files = result
+        _print_raw_pipeline_summary(
+            total_requirements=total_requirements,
+            total_tests=total_tests,
+            layer_stats=layer_stats,
+            component_stats=component_stats,
+            skipped_files=skipped_files
+        )
+    except Exception as e:
+        logger.exception("Ошибка agent pipeline-raw")
+        click.echo(f"Ошибка: {e}", err=True)
+        sys.exit(1)
+
+
+@agent_group.command("pipeline-demo")
+@click.option("--agent", "-a", type=str, default="local_agent",
+              help="Имя локального агента (например: codex, qwen, claude)")
+@click.option("--name", "-n", help="Имя демо-файла (например, petstore)")
+@click.option("--no-backup", is_flag=True, help="Не делать бэкап artifacts")
+@click.option("--yes", is_flag=True, help="Не спрашивать подтверждение")
+def agent_pipeline_demo(
+    agent: str,
+    name: str | None,
+    no_backup: bool,
+    yes: bool
+):
+    """Запускает полный pipeline: очистка -> demo -> автогенерация тестов."""
+    try:
+        result = _run_demo_pipeline(
+            name=name,
+            no_backup=no_backup,
+            agent_type=agent,
+            confirm=not yes
+        )
+        if result is None:
+            return
+        total_requirements, total_tests, layer_stats, component_stats, skipped_files = result
+        _print_raw_pipeline_summary(
+            total_requirements=total_requirements,
+            total_tests=total_tests,
+            layer_stats=layer_stats,
+            component_stats=component_stats,
+            skipped_files=skipped_files
+        )
+    except Exception as e:
+        logger.exception("Ошибка agent pipeline-demo")
+        click.echo(f"Ошибка: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command("info")
+@click.option("--format", "-f", type=click.Choice(["text", "json"]), default="text")
+def project_info(format: str):
+    """Показывает информацию о проекте (для CLI агента)."""
+    info = ProjectInfo()
+
+    if format == "json":
+        click.echo(info.export_to_json())
+    else:
+        # Выводим структуру для промпта
+        click.echo("\n## Структура проекта\n")
+        click.echo("```")
+        for module, files in info.get_project_structure().items():
+            click.echo(f"src/{module}/")
+            for f in files:
+                click.echo(f"  └── {f}")
+        click.echo("```")
+
+        click.echo(f"\n**Python файлов:** {info.count_python_files()}")
+        click.echo(f"**Строк кода:** {info.count_lines_of_code()}")
+
+
+# =============================================================================
+# Команды State Manager
+# =============================================================================
+
+@cli.group()
+def state():
+    """Управление состоянием сессии генерации."""
+    pass
+
+
+@state.command("show")
+@click.option("--format", "-f", type=click.Choice(["text", "json"]), default="text")
+def state_show(format: str):
+    """Показывает текущее состояние сессии."""
+    sm = StateManager()
+    session = sm.load()
+
+    if not session:
+        click.echo(click.style("Активная сессия не найдена.", fg="yellow"))
+        click.echo("Создайте новую: python main.py state new")
+        return
+
+    if format == "json":
+        import json
+        click.echo(json.dumps(sm.get_summary(), ensure_ascii=False, indent=2))
+    else:
+        click.echo(sm.get_context_for_agent())
+
+
+@state.command("new")
+@click.option("--agent", "-a", type=str,
+              help="Имя локального агента (например: codex, qwen, claude)")
+def state_new(agent: str):
+    """Создает новую сессию генерации."""
+    sm = StateManager()
+
+    existing = sm.load()
+    if existing:
+        if not click.confirm(f"Существует сессия {existing.session_id}. Перезаписать?"):
+            return
+
+    session = sm.create_session(agent_type=agent)
+    click.echo(click.style(f"Создана сессия: {session.session_id}", fg="green"))
+    if agent:
+        click.echo(f"Агент: {agent}")
+
+
+@state.command("add")
+@click.argument("text")
+def state_add(text: str):
+    """Добавляет требование в текущую сессию."""
+    sm = StateManager()
+    session = sm.load()
+
+    if not session:
+        click.echo(click.style("Сессия не найдена. Создайте: python main.py state new", fg="red"))
+        return
+
+    is_valid, error = validate_requirement_length(text)
+    if not is_valid:
+        click.echo(click.style(f"Невалидное требование: {error}", fg="red"))
+        return
+
+    req = sm.add_requirement(text, source="manual")
+    click.echo(click.style(f"Добавлено требование: {req.id}", fg="green"))
+
+
+@state.command("context")
+def state_context():
+    """Выводит контекст для CLI агента."""
+    sm = StateManager()
+    sm.load()
+    click.echo(sm.get_context_for_agent())
+
+
+@state.command("note")
+@click.argument("text")
+def state_note(text: str):
+    """Добавляет заметку к сессии."""
+    sm = StateManager()
+    session = sm.load()
+
+    if not session:
+        click.echo(click.style("Сессия не найдена.", fg="red"))
+        return
+
+    sm.add_note(text)
+    click.echo(click.style("Заметка добавлена.", fg="green"))
+
+
+@state.command("clear")
+@click.confirmation_option(prompt="Удалить состояние?")
+def state_clear():
+    """Удаляет текущее состояние."""
+    sm = StateManager()
+    sm.clear()
+    click.echo(click.style("Состояние очищено.", fg="green"))
+
+
+@state.command("resume")
+def state_resume():
+    """Показывает, что нужно сделать дальше."""
+    sm = StateManager()
+    session = sm.load()
+
+    if not session:
+        click.echo(click.style("Сессия не найдена.", fg="yellow"))
+        return
+
+    pending = sm.get_pending_requirements()
+
+    click.echo(click.style("\n=== RESUME ===\n", fg="cyan", bold=True))
+    click.echo(f"Текущий шаг: {session.progress.current_step}")
+    click.echo(f"Последнее действие: {session.progress.last_action or 'нет'}")
+    click.echo()
+
+    if pending:
+        click.echo(f"Ожидают обработки {len(pending)} требований:")
+        for req in pending[:5]:
+            click.echo(f"  - {req.id}: {req.text[:50]}...")
+        click.echo()
+        click.echo("Следующий шаг: проанализировать требования и сгенерировать тесты")
+    else:
+        click.echo("Все требования обработаны.")
+        review_count = sum(
+            1 for r in session.requirements
+            for tc in r.test_cases if tc.status == "draft"
+        )
+        if review_count:
+            click.echo(f"Тестов на ревью: {review_count}")
+        else:
+            click.echo("Можно экспортировать результаты:")
+            click.echo("  python main.py state export -f excel")
+
+
+@state.command("export")
+@click.option("--output", "-o", default="test_cases", help="Имя выходного файла")
+@click.option("--format", "-f", type=click.Choice(["excel", "csv", "both"]), default="excel")
+@click.option("--group-by-layer", is_flag=True, default=False,
+              help="Группировать тест-кейсы по слоям (api, ui, integration, e2e)")
+def state_export(output: str, format: str, group_by_layer: bool):
+    """Экспортирует результаты из state."""
+    sm = StateManager()
+    session = sm.load()
+
+    if not session:
+        click.echo(click.style("Сессия не найдена.", fg="red"))
+        return
+
+    if not session.requirements:
+        click.echo(click.style("Нет требований для экспорта.", fg="yellow"))
+        return
+
+    output_path = Path(output)
+    is_valid, error = validate_export_filename(output_path.name)
+    if not is_valid:
+        click.echo(click.style(f"Невалидное имя файла: {error}", fg="red"))
+        return
+    is_valid, error = validate_file_path(str(output_path), allow_absolute=True)
+    if not is_valid:
+        click.echo(click.style(f"Невалидный путь экспорта: {error}", fg="red"))
+        return
+
+    # Конвертируем state в GenerationResult
+    results = []
+    for req in session.requirements:
+        analysis = RequirementAnalysis()
+        if req.analysis:
+            analysis = RequirementAnalysis(
+                inputs=req.analysis.inputs,
+                outputs=req.analysis.outputs,
+                business_rules=req.analysis.business_rules,
+                states=req.analysis.states
+            )
+
+        test_cases = []
+        for tc in req.test_cases:
+            test_cases.append(TestCase(
+                id=tc.id,
+                title=tc.title,
+                priority=tc.priority,
+                preconditions=tc.preconditions,
+                steps=tc.steps,
+                expected_result=tc.expected_result,
+                test_type=tc.test_type,
+                technique=tc.technique,
+                # Новые поля
+                layer=getattr(tc, 'layer', 'api') or 'api',
+                component=getattr(tc, 'component', 'fullstack') or 'fullstack',
+                tags=getattr(tc, 'tags', []) or [],
+                ui_element=getattr(tc, 'ui_element', None),
+                api_endpoint=getattr(tc, 'api_endpoint', None)
+            ))
+
+        results.append(GenerationResult(
+            requirement_text=req.text,
+            analysis=analysis,
+            test_cases=test_cases,
+            tokens_used=0,
+            model="cli_agent"
+        ))
+
+    generator = TestCaseGenerator()
+
+    if format in ("excel", "both"):
+        path = generator.export_to_excel(results, output, group_by_layer=group_by_layer)
+        click.echo(f"Excel: {click.style(path, fg='green')}")
+        if group_by_layer:
+            click.echo("  (с группировкой по слоям: API, UI, Integration, E2E)")
+
+    if format in ("csv", "both"):
+        path = generator.export_to_csv(results, output)
+        click.echo(f"CSV: {click.style(path, fg='green')}")
+
+    sm.update_progress(step="completed", action=f"exported to {format}")
+
+
+if __name__ == "__main__":
+    cli()

@@ -1,0 +1,85 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# State files (опционально - можно закоммитить для совместной работы)
+.test_generator_state.json
+.test_generator_state.json.backup
+.ai-test-gen-signature-key
+
+# Output files
+output/
+exports/
+
+# Artifacts (generated files)
+artifacts/
+artifacts/*.xlsx
+artifacts/*.csv
+artifacts/*.png
+artifacts_backup*/
+
+# Raw requirements (keep only README)
+requirements/raw/*
+!requirements/raw/README.md
+
+# Logs
+logs/
+*.log
+
+# Confluence cache (если будет добавлен)
+.confluence_cache/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+.cache/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Jupyter Notebook (если будут добавлены примеры)
+.ipynb_checkpoints
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# pyenv
+.python-version
+
+# OS specific
+Thumbs.db
+Desktop.ini
