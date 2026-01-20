@@ -237,7 +237,7 @@ sm.update_test_case_status("REQ-001", "TC-002", "rejected", "Дублирует 
 ### Шаг 6: Экспорт
 
 ```bash
-python main.py state export -f excel -o final_tests
+python main.py state export -f excel -o artifacts/test_cases
 ```
 
 ## CLI команды
@@ -284,7 +284,7 @@ python main.py state resume
 python main.py state note "Важная заметка"
 
 # Экспорт результатов
-python main.py state export -o tests -f excel
+python main.py state export -o artifacts/test_cases -f excel
 
 # Очистить состояние
 python main.py state clear

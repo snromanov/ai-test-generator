@@ -394,7 +394,7 @@ class RequirementAnalyzer:
             techniques = ['equivalence_partitioning', 'error_guessing']
 
         text_lower = text.lower()
-        if 'llm' in text_lower or 'ai' in text_lower or 'ии' in text_lower:
+        if re.search(r'(?<!\w)(llm|ai)(?!\w)', text_lower) or re.search(r'(?<!\w)ии(?!\w)', text_lower):
             techniques.append('llm_integration')
         if 'календар' in text_lower or 'calendar' in text_lower:
             techniques.append('ui_calendar')

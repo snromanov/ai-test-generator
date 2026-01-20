@@ -127,6 +127,8 @@ def _prepare_tests_from_state() -> int:
         text_lower = req_text.lower()
 
         for field, bounds in analysis.boundary_values.items():
+            if bounds.get("type") == "count" and field.lower() in {"фото", "photo", "photos", "файлы", "files", "file"}:
+                continue
             min_val = bounds.get("min")
             max_val = bounds.get("max")
             if isinstance(min_val, int) and isinstance(max_val, int) and min_val <= max_val:
@@ -180,7 +182,7 @@ def _prepare_tests_from_state() -> int:
                 )
                 total_added += helper.add_test_cases_bulk(req_id, upload_tests)
 
-        if any(token in text_lower for token in ["llm", "ai", "ии"]):
+        if "llm_integration" in analysis.suggested_techniques:
             llm_tests = [
                 create_integration_test_case(
                     base_tc_id=f"{base_tc_id}-LLM-001",
@@ -349,7 +351,7 @@ def _print_raw_pipeline_summary(
 
     click.echo("\nТеперь вы можете:")
     click.echo("  python main.py state show")
-    click.echo("  python main.py state export -f excel --group-by-layer")
+    click.echo("  python main.py state export -f excel -o artifacts/test_cases --group-by-layer")
 
 
 @click.group()
@@ -535,7 +537,7 @@ def load_structured(file_path: str, auto_detect: bool):
 
         click.echo("\nТеперь вы можете:")
         click.echo("  python main.py state show")
-        click.echo("  python main.py state export -f excel --group-by-layer")
+        click.echo("  python main.py state export -f excel -o artifacts/test_cases --group-by-layer")
 
     except Exception as e:
         logger.exception("Ошибка загрузки структурированных требований")
@@ -579,7 +581,7 @@ def load_raw(dir_path: str, auto_detect: bool):
 
         click.echo("\nТеперь вы можете:")
         click.echo("  python main.py state show")
-        click.echo("  python main.py state export -f excel --group-by-layer")
+        click.echo("  python main.py state export -f excel -o artifacts/test_cases --group-by-layer")
 
     except Exception as e:
         logger.exception("Ошибка загрузки сырых требований")
@@ -941,11 +943,11 @@ def state_resume():
             click.echo(f"Тестов на ревью: {review_count}")
         else:
             click.echo("Можно экспортировать результаты:")
-            click.echo("  python main.py state export -f excel")
+            click.echo("  python main.py state export -f excel -o artifacts/test_cases")
 
 
 @state.command("export")
-@click.option("--output", "-o", default="test_cases", help="Имя выходного файла")
+@click.option("--output", "-o", default="artifacts/test_cases", help="Имя выходного файла")
 @click.option("--format", "-f", type=click.Choice(["excel", "csv", "both"]), default="excel")
 @click.option("--group-by-layer", is_flag=True, default=False,
               help="Группировать тест-кейсы по слоям (api, ui, integration, e2e)")
@@ -1024,6 +1026,123 @@ def state_export(output: str, format: str, group_by_layer: bool):
         click.echo(f"CSV: {click.style(path, fg='green')}")
 
     sm.update_progress(step="completed", action=f"exported to {format}")
+
+
+# =============================================================================
+# Unified Generate Command
+# =============================================================================
+
+@cli.command("generate")
+@click.option("--source", "-s", default="raw",
+              help="Источник требований: raw, demo/petstore, file.md, confluence:PAGE_ID")
+@click.option("--output", "-o", default="artifacts/test_cases",
+              help="Путь для экспорта (без расширения)")
+@click.option("--format", "-f", type=click.Choice(["excel", "csv", "both"]), default="excel",
+              help="Формат экспорта")
+@click.option("--agent", "-a", default="local_agent",
+              help="Тип агента (local_agent, codex, qwen, claude)")
+@click.option("--no-backup", is_flag=True,
+              help="Не создавать бэкап artifacts")
+@click.option("--no-clean", is_flag=True,
+              help="Не очищать state перед генерацией")
+@click.option("--no-group", is_flag=True,
+              help="Не группировать тесты по слоям в Excel")
+@click.option("--no-auto-detect", is_flag=True,
+              help="Не использовать автоопределение layer/component")
+def generate(
+    source: str,
+    output: str,
+    format: str,
+    agent: str,
+    no_backup: bool,
+    no_clean: bool,
+    no_group: bool,
+    no_auto_detect: bool
+):
+    """
+    Единая команда для генерации тест-кейсов.
+    
+    Выполняет полный цикл: загрузка → анализ → генерация → экспорт
+    
+    Примеры:
+    \b
+      # Из requirements/raw (по умолчанию)
+      python main.py generate
+    
+    \b
+      # Из демо-файла
+      python main.py generate --source demo/petstore
+    
+    \b
+      # Из конкретного файла
+      python main.py generate --source my_requirements.md
+    
+    \b
+      # Из Confluence
+      python main.py generate --source confluence:123456
+    
+    \b
+      # С кастомными настройками
+      python main.py generate --source raw --output my_tests --format both
+    """
+    from src.pipelines.orchestrator import create_orchestrator_from_args
+    
+    try:
+        click.echo(click.style("\n=== AI Test Generator ===\n", fg="cyan", bold=True))
+        click.echo(f"Источник: {click.style(source, fg='yellow')}")
+        click.echo(f"Агент: {agent}")
+        click.echo(f"Формат: {format}")
+        click.echo()
+        
+        # Создаем orchestrator
+        orchestrator = create_orchestrator_from_args(
+            source=source,
+            output=output,
+            format=format,
+            agent=agent,
+            no_backup=no_backup,
+            no_clean=no_clean,
+            no_group=no_group,
+            no_auto_detect=no_auto_detect
+        )
+        
+        # Запускаем pipeline
+        result = orchestrator.run()
+        
+        if not result.success:
+            click.echo(click.style(f"\nОшибка: {result.error_message}", fg="red"))
+            sys.exit(1)
+        
+        # Выводим результаты
+        click.echo(click.style("\n=== Результаты генерации ===\n", fg="green", bold=True))
+        click.echo(f"✓ Загружено требований: {click.style(str(result.requirements_loaded), fg='green', bold=True)}")
+        click.echo(f"✓ Сгенерировано тестов: {click.style(str(result.tests_generated), fg='green', bold=True)}")
+        
+        if result.skipped_files > 0:
+            click.echo(f"⚠ Пропущено файлов: {click.style(str(result.skipped_files), fg='yellow')}")
+        
+        if result.layer_stats:
+            click.echo("\nСтатистика по слоям:")
+            for layer, count in sorted(result.layer_stats.items()):
+                display_name = get_layer_display_name(layer) if hasattr(layer, 'value') else layer.upper()
+                click.echo(f"  {display_name}: {count}")
+        
+        if result.component_stats:
+            click.echo("\nСтатистика по компонентам:")
+            for component, count in sorted(result.component_stats.items()):
+                color = {"backend": "blue", "frontend": "yellow", "fullstack": "green"}.get(component, "white")
+                click.echo(f"  {click.style(component.capitalize(), fg=color)}: {count}")
+        
+        click.echo("\nЭкспортированные файлы:")
+        for path in result.export_paths:
+            click.echo(f"  {click.style(path, fg='green', bold=True)}")
+        
+        click.echo(click.style("\n✓ Генерация завершена успешно!\n", fg="green", bold=True))
+        
+    except Exception as e:
+        logger.exception("Ошибка генерации")
+        click.echo(click.style(f"\nОшибка: {e}", fg="red"))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

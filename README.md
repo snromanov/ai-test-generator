@@ -64,21 +64,43 @@ CONFLUENCE_TOKEN=your-confluence-api-token
 LOG_LEVEL=INFO
 ```
 
-## Быстрый старт (демо)
+## Быстрый старт
+
+### Простейший способ - одна команда
+
+```bash
+# Генерация из демо-файла (8 требований → 63 теста за 1 секунду)
+python main.py generate --source demo/petstore
+
+# Генерация из requirements/raw
+python main.py generate
+
+# Генерация из своего файла
+python main.py generate --source my_requirements.md
+```
+
+**Готово!** Результаты в `artifacts/test_cases.xlsx`
+
+Полное руководство: [QUICKSTART.md](QUICKSTART.md)
+
+### Старый способ (step-by-step)
+
+<details>
+<summary>Развернуть пошаговую инструкцию</summary>
 
 1. Создайте новую сессию:
 ```bash
-python3 main.py state new --agent local_agent
+python main.py state new --agent local_agent
 ```
 
 2. Загрузите демо-требования:
 ```bash
-python3 main.py load-demo --name petstore
+python main.py load-demo --name petstore
 ```
 
 3. Запустите локальный агент (автопоток):
 ```bash
-python3 - <<'PY'
+python - <<'PY'
 from src.utils.test_generator_helper import (
     TestGeneratorHelper,
     create_api_crud_test_suite,
@@ -142,8 +164,10 @@ PY
 
 4. Экспортируйте результаты:
 ```bash
-python3 main.py state export -f excel -o test_cases
+python main.py state export -f excel -o artifacts/test_cases
 ```
+
+</details>
 
 Подробное руководство: [AGENT.md](AGENT.md) | [WORKFLOW.md](WORKFLOW.md)
 
@@ -325,13 +349,13 @@ python3 main.py agent pipeline-demo --agent codex --name petstore
 
 ```bash
 # Экспорт в Excel
-python3 main.py state export -f excel -o test_cases
+python3 main.py state export -f excel -o artifacts/test_cases
 
 # Экспорт в CSV
-python3 main.py state export -f csv -o test_cases
+python3 main.py state export -f csv -o artifacts/test_cases
 
 # Экспорт в оба формата
-python3 main.py state export -f both -o test_cases
+python3 main.py state export -f both -o artifacts/test_cases
 ```
 
 ## CLI команды
@@ -375,7 +399,7 @@ python3 main.py state resume
 python3 main.py state note "Важная заметка"
 
 # Экспорт результатов
-python3 main.py state export -o tests -f excel
+python3 main.py state export -o artifacts/test_cases -f excel
 
 # Очистить состояние
 python3 main.py state clear
@@ -396,6 +420,7 @@ ai-test-generator/
 │   └── raw/             # Сырые требования (.md/.txt)
 ├── scripts/             # Вспомогательные скрипты
 ├── main.py              # CLI интерфейс
+├── generate_tests.py    # Быстрый запуск генерации
 ├── ARCHITECTURE.md      # Архитектура (ASCII диаграммы)
 ├── UML.puml             # PlantUML диаграммы
 ├── SECURITY.md          # Документация по безопасности
@@ -411,6 +436,7 @@ ai-test-generator/
 | Документ | Описание |
 |----------|----------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Архитектура, диаграммы, паттерны |
+| [QUICKSTART.md](QUICKSTART.md) | Быстрый старт и примеры |
 | [SECURITY.md](SECURITY.md) | Безопасность, OWASP, аудит |
 | [AGENT.md](AGENT.md) | Руководство для CLI агентов |
 | [WORKFLOW.md](WORKFLOW.md) | Пошаговый процесс генерации |
@@ -425,10 +451,13 @@ ai-test-generator/
 
 ```bash
 # Информация о проекте
-python3 main.py info
+python main.py info
 
-# Демо генерация (без внешнего агента)
-python3 generate_demo_tests.py
+# Генерация тестов (универсальный скрипт)
+./generate_tests.py --source demo/petstore
+
+# Альтернативно через main.py
+python main.py generate --source demo/petstore
 ```
 
 ## Лицензия

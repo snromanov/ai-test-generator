@@ -979,6 +979,51 @@ def create_file_upload_tests(
             'tags': ['upload', 'drag-drop', 'ui'],
             'ui_element': ui_element
         },
+    ]
+
+    if max_files and max_files > 1:
+        test_cases.extend([
+            {
+                'id': f'{base_tc_id}-UPLOAD-006',
+                'title': f'Успешная загрузка максимального количества файлов ({max_files})',
+                'priority': 'High',
+                'test_type': 'Boundary',
+                'technique': 'ui_file_upload',
+                'preconditions': preconditions + [
+                    f'Подготовлены {max_files} файла(ов) формата {formats_str}, каждый < {max_size_mb} MB'
+                ],
+                'steps': [
+                    {'step': 1, 'action': f'Выбрать {max_files} файлов для загрузки'},
+                    {'step': 2, 'action': 'Дождаться завершения загрузки'}
+                ],
+                'expected_result': f'1. Загружены все {max_files} файлов\\n2. Отображаются все превью/имена',
+                'layer': 'ui',
+                'component': 'fullstack',
+                'tags': ['upload', 'boundary', 'ui'],
+                'ui_element': ui_element
+            },
+            {
+                'id': f'{base_tc_id}-UPLOAD-007',
+                'title': f'Отклонение загрузки при превышении лимита файлов ({max_files + 1})',
+                'priority': 'High',
+                'test_type': 'Negative',
+                'technique': 'ui_file_upload',
+                'preconditions': preconditions + [
+                    f'Подготовлены {max_files + 1} файлов формата {formats_str}, каждый < {max_size_mb} MB'
+                ],
+                'steps': [
+                    {'step': 1, 'action': f'Выбрать {max_files + 1} файлов для загрузки'},
+                    {'step': 2, 'action': 'Проверить сообщение об ошибке'}
+                ],
+                'expected_result': f'1. Загрузка отклонена или ограничена до {max_files} файлов\\n2. Сообщение о лимите количества файлов',
+                'layer': 'ui',
+                'component': 'frontend',
+                'tags': ['upload', 'validation', 'ui'],
+                'ui_element': ui_element
+            },
+        ])
+
+    test_cases.extend([
         # Негативные тесты
         {
             'id': f'{base_tc_id}-UPLOAD-003',
@@ -1031,7 +1076,7 @@ def create_file_upload_tests(
             'tags': ['upload', 'delete', 'ui'],
             'ui_element': ui_element
         }
-    ]
+    ])
 
     return test_cases
 

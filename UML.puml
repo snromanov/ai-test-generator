@@ -11,6 +11,7 @@ package "Components" {
   [StructuredRequirementParser] as SRP
   [TestGeneratorHelper] as TGH
   [RequirementAnalyzer] as RA
+  [PipelineOrchestrator] as PO
   [ConfluenceParser] as CP
   [Exporters (Excel/CSV)] as EXP
   [Cleanup] as CLN
@@ -39,6 +40,7 @@ CLI --> CLN
 CLI --> PI
 CLI --> IV
 CLI --> AM
+CLI --> PO
 
 TCG --> CP
 TCG --> SM
@@ -50,6 +52,14 @@ TGH --> SM
 TGH --> LOG
 RA --> TGH
 RA --> LOG
+PO --> CLN
+PO --> SM
+PO --> TGH
+PO --> RA
+PO --> TCG
+PO --> EXP
+PO --> IV
+PO --> LOG
 
 CP --> SSRF
 CP --> RL
