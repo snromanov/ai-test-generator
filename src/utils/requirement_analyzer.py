@@ -53,6 +53,7 @@ class RequirementAnalyzer:
     COUNT_FIELD_PATTERN = r'(?:кол-во|количество|число)\s+([a-zA-Zа-яА-Я_]+)'
     MAX_COUNT_PATTERN = r'(?:максим(?:ум|ально)|не более)\s+(?:кол-во|количество)\s+([a-zA-Zа-яА-Я_]+).*?(\d+)'
     MIN_COUNT_PATTERN = r'(?:миним(?:ум|ально)|не менее)\s+(?:кол-во|количество)\s+([a-zA-Zа-яА-Я_]+).*?(\d+)'
+    SIZE_PATTERN = r'(?:размер|size)\s*(?:до|<=|не более|макс(?:имум|\.?)?)\s*(\d+(?:[.,]\d+)?)\s*(kb|кб|mb|мб|gb|гб)'
     
     def __init__(self):
         pass
@@ -314,6 +315,26 @@ class RequirementAnalyzer:
                 boundary_values.setdefault(field, {'type': 'count'})
                 boundary_values[field]['min'] = min_val
                 boundary_values[field].setdefault('max', min_val)
+
+        # Ограничения по размеру файла
+        text_lower = text.lower()
+        if any(token in text_lower for token in ['файл', 'photo', 'upload', 'изображен', 'картинк', 'file']):
+            for match in re.finditer(self.SIZE_PATTERN, text, re.IGNORECASE):
+                raw_val = match.group(1).replace(',', '.')
+                unit = match.group(2).lower()
+                try:
+                    value = float(raw_val)
+                except ValueError:
+                    continue
+                if unit in ('kb', 'кб'):
+                    max_mb = value / 1024
+                elif unit in ('gb', 'гб'):
+                    max_mb = value * 1024
+                else:
+                    max_mb = value
+                boundary_values.setdefault('file_size', {'type': 'file_size_mb'})
+                boundary_values['file_size']['max'] = max_mb
+                boundary_values['file_size'].setdefault('min', 0)
 
         return boundary_values
     

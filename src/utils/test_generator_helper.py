@@ -918,7 +918,7 @@ def create_file_upload_tests(
     req_id: str,
     base_tc_id: str,
     allowed_formats: List[str],
-    max_size_mb: int,
+    max_size_mb: float | None,
     max_files: int = 1,
     preconditions: List[str] = None,
     ui_element: str = "file-upload"
@@ -930,7 +930,7 @@ def create_file_upload_tests(
         req_id: ID требования
         base_tc_id: Базовый ID
         allowed_formats: Допустимые форматы (например, ['jpg', 'png'])
-        max_size_mb: Максимальный размер в МБ
+        max_size_mb: Максимальный размер в МБ (если задан)
         max_files: Максимальное количество файлов
         preconditions: Общие предусловия
         ui_element: Название UI элемента
@@ -940,6 +940,7 @@ def create_file_upload_tests(
     """
     preconditions = preconditions or ['Страница загрузки файлов открыта']
     formats_str = ', '.join(allowed_formats).upper()
+    size_hint = f' размером < {max_size_mb} MB' if max_size_mb else ''
 
     test_cases = [
         # Позитивные тесты
@@ -949,7 +950,7 @@ def create_file_upload_tests(
             'priority': 'Critical',
             'test_type': 'Positive',
             'technique': 'ui_file_upload',
-            'preconditions': preconditions + [f'Подготовлен файл test.{allowed_formats[0]} размером < {max_size_mb} MB'],
+            'preconditions': preconditions + [f'Подготовлен файл test.{allowed_formats[0]}{size_hint}'],
             'steps': [
                 {'step': 1, 'action': 'Кликнуть на зону загрузки'},
                 {'step': 2, 'action': f'Выбрать файл test.{allowed_formats[0]}'},
@@ -990,7 +991,7 @@ def create_file_upload_tests(
                 'test_type': 'Boundary',
                 'technique': 'ui_file_upload',
                 'preconditions': preconditions + [
-                    f'Подготовлены {max_files} файла(ов) формата {formats_str}, каждый < {max_size_mb} MB'
+                    f'Подготовлены {max_files} файла(ов) формата {formats_str}{size_hint}'
                 ],
                 'steps': [
                     {'step': 1, 'action': f'Выбрать {max_files} файлов для загрузки'},
@@ -1009,7 +1010,7 @@ def create_file_upload_tests(
                 'test_type': 'Negative',
                 'technique': 'ui_file_upload',
                 'preconditions': preconditions + [
-                    f'Подготовлены {max_files + 1} файлов формата {formats_str}, каждый < {max_size_mb} MB'
+                    f'Подготовлены {max_files + 1} файлов формата {formats_str}{size_hint}'
                 ],
                 'steps': [
                     {'step': 1, 'action': f'Выбрать {max_files + 1} файлов для загрузки'},
@@ -1042,7 +1043,7 @@ def create_file_upload_tests(
             'tags': ['upload', 'validation', 'ui'],
             'ui_element': ui_element
         },
-        {
+        *([] if not max_size_mb else [{
             'id': f'{base_tc_id}-UPLOAD-004',
             'title': f'Отклонение файла превышающего лимит ({max_size_mb} MB)',
             'priority': 'High',
@@ -1058,7 +1059,7 @@ def create_file_upload_tests(
             'component': 'frontend',
             'tags': ['upload', 'boundary', 'ui'],
             'ui_element': ui_element
-        },
+        }]),
         {
             'id': f'{base_tc_id}-UPLOAD-005',
             'title': 'Удаление загруженного файла',

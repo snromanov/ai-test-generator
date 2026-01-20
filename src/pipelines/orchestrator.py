@@ -346,6 +346,8 @@ class PipelineOrchestrator:
 
             # Boundary Value Analysis
             for field, bounds in analysis.boundary_values.items():
+                if bounds.get("type") == "file_size_mb":
+                    continue
                 if bounds.get("type") == "count" and field.lower() in {"фото", "photo", "photos", "файлы", "files", "file"}:
                     continue
                 min_val = bounds.get("min")
@@ -391,6 +393,7 @@ class PipelineOrchestrator:
             # File upload tests
             if any(token in text_lower for token in ["фото", "файл", "upload", "photo", "file"]):
                 max_files = self._extract_max_files(analysis.boundary_values)
+                max_size_mb = self._extract_max_size_mb(analysis.boundary_values)
                 if max_files is None and ("нескольк" in text_lower or "multiple" in text_lower):
                     max_files = 10
                 if max_files:
@@ -398,7 +401,7 @@ class PipelineOrchestrator:
                         req_id=req_id,
                         base_tc_id=base_tc_id,
                         allowed_formats=["jpg", "png"],
-                        max_size_mb=10,
+                        max_size_mb=max_size_mb,
                         max_files=max_files,
                         ui_element="photo-upload"
                     )
@@ -522,6 +525,16 @@ class PipelineOrchestrator:
                 return bounds["max"]
             if field.lower() in {"фото", "photo", "photos", "файлы", "files", "file"}:
                 if isinstance(bounds.get("max"), int):
+                    return bounds["max"]
+        return None
+
+    def _extract_max_size_mb(self, boundary_values: dict) -> Optional[float]:
+        """Извлекает максимальный размер файла в МБ из boundary_values."""
+        for field, bounds in boundary_values.items():
+            if bounds.get("type") == "file_size_mb" and isinstance(bounds.get("max"), (int, float)):
+                return bounds["max"]
+            if field.lower() in {"file_size", "size", "размер"}:
+                if isinstance(bounds.get("max"), (int, float)):
                     return bounds["max"]
         return None
 
