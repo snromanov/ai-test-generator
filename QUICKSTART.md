@@ -154,12 +154,46 @@ cp .env.example .env
 # CSV (простой формат)
 ./generate_tests.py --source demo/petstore --format csv
 
-# Оба формата сразу
+# Allure TestOps (CSV для импорта в Allure)
+./generate_tests.py --source demo/petstore --format allure
+
+# Оба формата сразу (Excel + CSV)
 ./generate_tests.py --source demo/petstore --format both
 
 # Кастомное имя выходного файла
 ./generate_tests.py --source demo/petstore --output my_project_tests
 ```
+
+### Экспорт для Allure TestOps
+
+Формат `allure` создает CSV-файл, полностью совместимый с импортом в Allure TestOps:
+
+```bash
+# Базовый экспорт
+./generate_tests.py --source raw --format allure
+
+# С метаданными Allure
+./generate_tests.py --source raw --format allure \
+  --allure-suite "Мой проект" \
+  --allure-feature "Авторизация" \
+  --allure-epic "MVP" \
+  --allure-owner "username" \
+  --allure-jira "https://jira.company.com/browse/PROJ-123"
+
+# Экспорт существующих тестов в Allure формат
+python main.py export -f allure --allure-suite "календарь"
+```
+
+**Формат Allure CSV:**
+- Разделитель: `;` (точка с запятой)
+- Сценарий: `[step N]` для шагов, `[expected N.1]` для результатов
+- Поддерживает: Suite, Feature, Epic, Owner, Jira, теги
+
+**Импорт в Allure TestOps:**
+1. Перейдите в раздел "Тест-кейсы"
+2. Нажмите "Импорт" → выберите CSV файл
+3. Включите "Показывать заголовки" и "Автоопределение формата"
+4. Настройте маппинг полей (name → Название, scenario → Сценарий, и т.д.)
 
 ### Полная команда с опциями
 
@@ -178,12 +212,17 @@ cp .env.example .env
 |------|----------|--------------|
 | `--source` | Источник требований (raw, demo/petstore, file.md, confluence:ID) | `raw` |
 | `--output` | Имя выходного файла (без расширения) | `artifacts/test_cases` |
-| `--format` | Формат экспорта (excel, csv, both) | `excel` |
+| `--format` | Формат экспорта (excel, csv, allure, both) | `excel` |
 | `--agent` | Тип агента (local_agent, codex, qwen, claude) | `local_agent` |
 | `--no-backup` | Не создавать бэкап artifacts | false |
 | `--no-clean` | Не очищать state перед генерацией | false |
 | `--no-group` | Не группировать по слоям в Excel | false |
 | `--no-auto-detect` | Не определять layer/component автоматически | false |
+| `--allure-suite` | Suite для Allure TestOps | - |
+| `--allure-feature` | Feature для Allure TestOps | - |
+| `--allure-epic` | Epic для Allure TestOps | - |
+| `--allure-owner` | Owner для Allure TestOps | - |
+| `--allure-jira` | Jira link для Allure TestOps | - |
 
 ---
 

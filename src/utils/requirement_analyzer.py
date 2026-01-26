@@ -71,6 +71,9 @@ class RequirementAnalyzer:
         """
         logger.info(f"Начало анализа требования {req_id or 'unknown'}")
         
+        layer_info = self._detect_layer_tags(req_text)
+        front_only = layer_info["front_only"]
+
         # Определить endpoint и HTTP метод
         endpoint, http_method = self._extract_endpoint(req_text)
         
@@ -88,6 +91,9 @@ class RequirementAnalyzer:
         
         # Извлечь состояния
         states = self._extract_states(req_text)
+        if front_only and not endpoint:
+            # Для чисто UI требований не выводим состояния как основу для API тестов
+            states = []
         
         # Извлечь граничные значения
         boundary_values = self._extract_boundary_values(req_text, inputs)
@@ -117,6 +123,17 @@ class RequirementAnalyzer:
                    f"{len(techniques)} техник")
         
         return result
+
+    def _detect_layer_tags(self, text: str) -> Dict[str, bool]:
+        """Определяет layer-теги по тексту требования."""
+        text_lower = text.lower()
+        has_front = any(tag in text_lower for tag in ["[front]", "[ui]", "[frontend]"])
+        has_back = any(tag in text_lower for tag in ["[back]", "[api]", "[backend]"])
+        return {
+            "has_front": has_front,
+            "has_back": has_back,
+            "front_only": has_front and not has_back
+        }
     
     def _extract_endpoint(self, text: str) -> Tuple[str, str]:
         """Извлекает endpoint и HTTP метод."""

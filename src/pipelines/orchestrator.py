@@ -53,13 +53,19 @@ class PipelineConfig:
     source_type: SourceType
     source_path: Optional[str] = None  # Путь к файлу/директории или PAGE_ID
     output_path: str = "artifacts/test_cases"
-    output_format: Literal["excel", "csv", "both"] = "excel"
+    output_format: Literal["excel", "csv", "allure", "both"] = "excel"
     agent_type: str = "local_agent"
     auto_detect: bool = True  # Автоопределение layer/component
     backup_artifacts: bool = True
     clean_state: bool = True  # Очистить state перед генерацией
     group_by_layer: bool = True  # Группировать тесты по слоям в экспорте
     structure_requirements: bool = True  # Нормализовать требования перед генерацией
+    # Allure TestOps параметры
+    allure_suite: str = ""
+    allure_feature: str = ""
+    allure_epic: str = ""
+    allure_owner: str = ""
+    allure_jira: str = ""
 
 
 @dataclass
@@ -378,49 +384,73 @@ class PipelineOrchestrator:
             text_lower = req_text.lower()
             feedback_hints = self._extract_feedback_hints(req_obj)
 
+            # Определяем теги слоёв заранее (для layer gating)
+            req_tags = getattr(req_obj, 'tags', []) or []
+            has_back = any(t.lower() in {'back', 'backend', 'api'} for t in req_tags) or '[back]' in text_lower
+            has_front = any(t.lower() in {'front', 'frontend', 'ui'} for t in req_tags) or '[front]' in text_lower
+            front_only = has_front and not has_back
+
             # Boundary Value Analysis
-            for field, bounds in analysis.boundary_values.items():
-                if bounds.get("type") == "file_size_mb":
-                    continue
-                if bounds.get("type") == "count" and field.lower() in {"фото", "photo", "photos", "файлы", "files", "file"}:
-                    continue
-                min_val = bounds.get("min")
-                max_val = bounds.get("max")
-                if isinstance(min_val, int) and isinstance(max_val, int) and min_val <= max_val:
-                    bva_tests = create_boundary_test_cases(
-                        req_id=req_id,
-                        base_tc_id=f"{base_tc_id}-{field.upper()}",
-                        field_name=field,
-                        min_value=min_val,
-                        max_value=max_val,
-                        valid_example=(min_val + max_val) // 2,
-                        invalid_low=min_val - 1,
-                        invalid_high=max_val + 1,
-                        endpoint=analysis.endpoint or "N/A"
-                    )
-                    total_added += self.helper.add_test_cases_bulk(req_id, bva_tests)
+            if not front_only and analysis.endpoint:
+                for field, bounds in analysis.boundary_values.items():
+                    if bounds.get("type") == "file_size_mb":
+                        continue
+                    if bounds.get("type") == "count" and field.lower() in {"фото", "photo", "photos", "файлы", "files", "file"}:
+                        continue
+                    min_val = bounds.get("min")
+                    max_val = bounds.get("max")
+                    if isinstance(min_val, int) and isinstance(max_val, int) and min_val <= max_val:
+                        bva_tests = create_boundary_test_cases(
+                            req_id=req_id,
+                            base_tc_id=f"{base_tc_id}-{field.upper()}",
+                            field_name=field,
+                            min_value=min_val,
+                            max_value=max_val,
+                            valid_example=(min_val + max_val) // 2,
+                            invalid_low=min_val - 1,
+                            invalid_high=max_val + 1,
+                            endpoint=analysis.endpoint
+                        )
+                        total_added += self.helper.add_test_cases_bulk(req_id, bva_tests)
 
             # Equivalence Partitioning
-            for field, classes in analysis.equivalence_classes.items():
-                valid_values = classes.get("valid", [])
-                invalid_values = classes.get("invalid", [])
-                if valid_values or invalid_values:
-                    ep_tests = create_equivalence_test_cases(
-                        req_id=req_id,
-                        base_tc_id=f"{base_tc_id}-{field.upper()}",
-                        field_name=field,
-                        valid_values=valid_values,
-                        invalid_values=invalid_values,
-                        endpoint=analysis.endpoint or "N/A"
-                    )
-                    total_added += self.helper.add_test_cases_bulk(req_id, ep_tests)
+            if not front_only and analysis.endpoint:
+                for field, classes in analysis.equivalence_classes.items():
+                    valid_values = classes.get("valid", [])
+                    invalid_values = classes.get("invalid", [])
+                    if valid_values or invalid_values:
+                        ep_tests = create_equivalence_test_cases(
+                            req_id=req_id,
+                            base_tc_id=f"{base_tc_id}-{field.upper()}",
+                            field_name=field,
+                            valid_values=valid_values,
+                            invalid_values=invalid_values,
+                            endpoint=analysis.endpoint
+                        )
+                        total_added += self.helper.add_test_cases_bulk(req_id, ep_tests)
 
             # Calendar tests
             if "календар" in text_lower or "calendar" in text_lower:
+                status_filters = self._extract_statuses_for_ui(req_text)
+                location_hint = None
+                if "домик" in text_lower and "администр" in text_lower:
+                    location_hint = "в разделе в домиках над администрированием"
+                check_color_by_community = "сообществ" in text_lower and "цвет" in text_lower
+                check_current_datetime = (
+                    "текущая дата" in text_lower or "текущие дата" in text_lower
+                    or "время" in text_lower and "браузер" in text_lower
+                    or "красн" in text_lower
+                )
+                check_month_view = "по месяц" in text_lower or "месячн" in text_lower
                 calendar_tests = create_calendar_tests(
                     req_id=req_id,
                     base_tc_id=base_tc_id,
-                    ui_element="calendar"
+                    ui_element="calendar",
+                    status_filters=status_filters,
+                    location_hint=location_hint,
+                    check_color_by_community=check_color_by_community,
+                    check_current_datetime_highlight=check_current_datetime,
+                    check_month_view=check_month_view
                 )
                 total_added += self.helper.add_test_cases_bulk(req_id, calendar_tests)
 
@@ -468,11 +498,6 @@ class PipelineOrchestrator:
                 ]
                 total_added += self.helper.add_test_cases_bulk(req_id, llm_tests)
 
-            # Определяем теги слоёв
-            req_tags = getattr(req_obj, 'tags', []) or []
-            has_back = any(t.lower() in {'back', 'backend', 'api'} for t in req_tags) or '[back]' in text_lower
-            has_front = any(t.lower() in {'front', 'frontend', 'ui'} for t in req_tags) or '[front]' in text_lower
-
             # API CRUD тесты для [Back] требований
             if has_back and analysis.endpoint:
                 req_type = self._infer_crud_type(text_lower)
@@ -489,7 +514,7 @@ class PipelineOrchestrator:
                     total_added += self.helper.add_test_cases_bulk(req_id, api_tests)
 
             # State Transition тесты
-            if analysis.states and len(analysis.states) > 1:
+            if not front_only and analysis.endpoint and analysis.states and len(analysis.states) > 1:
                 valid_transitions = self._infer_valid_transitions(analysis.states)
                 invalid_transitions = self._infer_invalid_transitions(analysis.states)
                 if valid_transitions or invalid_transitions:
@@ -523,7 +548,7 @@ class PipelineOrchestrator:
                 total_added += self.helper.add_test_cases_bulk(req_id, e2e_tests)
 
             # Validation тесты для форм
-            if 'ui_form' in analysis.suggested_techniques or has_front:
+            if not front_only and ('ui_form' in analysis.suggested_techniques or has_front):
                 field_validations = self._extract_field_validations(req_text, analysis)
                 if field_validations:
                     val_tests = create_validation_test_cases(
@@ -553,6 +578,19 @@ class PipelineOrchestrator:
 
         logger.info(f"Сгенерировано {total_added} тест-кейсов")
         return total_added
+
+    @staticmethod
+    def _extract_statuses_for_ui(text: str) -> list[str]:
+        """Извлекает перечисление статусов для UI проверки отображения."""
+        statuses = []
+        for match in re.finditer(r'статус[^\n.]*', text, re.IGNORECASE):
+            segment = match.group(0)
+            quoted = re.findall(r'"([^"]+)"|\'([^\']+)\'', segment)
+            for item in quoted:
+                val = (item[0] or item[1]).strip()
+                if val and len(val) < 30:
+                    statuses.append(val)
+        return list(dict.fromkeys(statuses))
 
     @staticmethod
     def _build_structured_text(parsed) -> str:
@@ -858,6 +896,19 @@ class PipelineOrchestrator:
             export_paths.append(path)
             logger.info(f"Экспорт CSV: {path}")
 
+        if self.config.output_format == "allure":
+            path = generator.export_to_allure_csv(
+                results,
+                self.config.output_path,
+                suite=self.config.allure_suite,
+                feature=self.config.allure_feature,
+                epic=self.config.allure_epic,
+                owner=self.config.allure_owner,
+                jira_link=self.config.allure_jira
+            )
+            export_paths.append(path)
+            logger.info(f"Экспорт Allure CSV: {path}")
+
         self.sm.update_progress(step="completed", action=f"exported to {self.config.output_format}")
         return export_paths
 
@@ -909,19 +960,29 @@ def create_orchestrator_from_args(
     no_clean: bool = False,
     no_group: bool = False,
     no_auto_detect: bool = False,
+    allure_suite: str = "",
+    allure_feature: str = "",
+    allure_epic: str = "",
+    allure_owner: str = "",
+    allure_jira: str = "",
 ) -> PipelineOrchestrator:
     """
     Создает orchestrator из аргументов CLI.
-    
+
     Args:
         source: Путь к источнику (raw, demo/petstore, file.md, confluence:PAGE_ID)
         output: Путь для экспорта (по умолчанию artifacts/test_cases)
-        format: Формат экспорта (excel, csv, both)
+        format: Формат экспорта (excel, csv, allure, both)
         agent: Тип агента
         no_backup: Не делать бэкап artifacts
         no_clean: Не очищать state
         no_group: Не группировать по слоям
         no_auto_detect: Не использовать автоопределение layer/component
+        allure_suite: Suite для Allure TestOps
+        allure_feature: Feature для Allure TestOps
+        allure_epic: Epic для Allure TestOps
+        allure_owner: Owner для Allure TestOps
+        allure_jira: Jira link для Allure TestOps
     """
     # Определяем тип источника
     if source.startswith("confluence:"):
@@ -950,7 +1011,12 @@ def create_orchestrator_from_args(
         auto_detect=not no_auto_detect,
         backup_artifacts=not no_backup,
         clean_state=not no_clean,
-        group_by_layer=not no_group
+        group_by_layer=not no_group,
+        allure_suite=allure_suite,
+        allure_feature=allure_feature,
+        allure_epic=allure_epic,
+        allure_owner=allure_owner,
+        allure_jira=allure_jira,
     )
 
     return PipelineOrchestrator(config)

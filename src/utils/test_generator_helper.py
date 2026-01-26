@@ -1159,7 +1159,12 @@ def create_calendar_tests(
     max_date: str = None,
     has_range: bool = False,
     preconditions: List[str] = None,
-    ui_element: str = "date-picker"
+    ui_element: str = "date-picker",
+    status_filters: List[str] = None,
+    location_hint: str = None,
+    check_color_by_community: bool = False,
+    check_current_datetime_highlight: bool = False,
+    check_month_view: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Генерирует набор тест-кейсов для календаря.
@@ -1177,6 +1182,7 @@ def create_calendar_tests(
         Список тест-кейсов
     """
     preconditions = preconditions or ['Страница с календарем открыта']
+    status_filters = status_filters or []
 
     test_cases = [
         # Базовые тесты
@@ -1342,6 +1348,103 @@ def create_calendar_tests(
             'layer': 'ui',
             'component': 'frontend',
             'tags': ['calendar', 'boundary', 'ui'],
+            'ui_element': ui_element
+        })
+
+    # Дополнительные UI проверки по требованиям
+    if status_filters:
+        status_list = ", ".join(status_filters)
+        test_cases.append({
+            'id': f'{base_tc_id}-CAL-010',
+            'title': f'Отображение событий только в статусах: {status_list}',
+            'priority': 'High',
+            'test_type': 'Positive',
+            'technique': 'ui_calendar',
+            'preconditions': preconditions + [f'В системе есть события со статусами: {status_list}'],
+            'steps': [
+                {'step': 1, 'action': 'Открыть календарь'},
+                {'step': 2, 'action': 'Проверить отображение событий'}
+            ],
+            'expected_result': f'1. Отображаются события со статусами: {status_list}\\n2. События с другими статусами не отображаются',
+            'layer': 'ui',
+            'component': 'frontend',
+            'tags': ['calendar', 'status', 'ui'],
+            'ui_element': ui_element
+        })
+
+    if location_hint:
+        test_cases.append({
+            'id': f'{base_tc_id}-CAL-011',
+            'title': 'Проверка расположения календаря в нужном разделе',
+            'priority': 'High',
+            'test_type': 'Positive',
+            'technique': 'ui_calendar',
+            'preconditions': ['Пользователь авторизован'],
+            'steps': [
+                {'step': 1, 'action': 'Перейти в раздел с календарем'},
+                {'step': 2, 'action': 'Проверить расположение календаря'}
+            ],
+            'expected_result': f'Календарь расположен в: {location_hint}',
+            'layer': 'ui',
+            'component': 'frontend',
+            'tags': ['calendar', 'layout', 'ui'],
+            'ui_element': ui_element
+        })
+
+    if check_color_by_community:
+        test_cases.append({
+            'id': f'{base_tc_id}-CAL-012',
+            'title': 'Цветовая индикация событий по сообществам',
+            'priority': 'High',
+            'test_type': 'Positive',
+            'technique': 'ui_calendar',
+            'preconditions': preconditions + ['В мастер-админке настроены цвета для сообществ', 'В календаре есть события из разных сообществ'],
+            'steps': [
+                {'step': 1, 'action': 'Открыть календарь'},
+                {'step': 2, 'action': 'Сопоставить цвета событий с цветами сообществ'}
+            ],
+            'expected_result': 'Цвет события соответствует цвету сообщества из мастер-админки',
+            'layer': 'ui',
+            'component': 'frontend',
+            'tags': ['calendar', 'color', 'ui'],
+            'ui_element': ui_element
+        })
+
+    if check_current_datetime_highlight:
+        test_cases.append({
+            'id': f'{base_tc_id}-CAL-013',
+            'title': 'Подсветка текущей даты и времени из браузера',
+            'priority': 'High',
+            'test_type': 'Positive',
+            'technique': 'ui_calendar',
+            'preconditions': preconditions + ['Текущие дата/время браузера известны'],
+            'steps': [
+                {'step': 1, 'action': 'Открыть календарь'},
+                {'step': 2, 'action': 'Найти текущую дату/время на календаре'}
+            ],
+            'expected_result': 'Текущая дата и время выделены красным и соответствуют времени браузера',
+            'layer': 'ui',
+            'component': 'frontend',
+            'tags': ['calendar', 'time', 'ui'],
+            'ui_element': ui_element
+        })
+
+    if check_month_view:
+        test_cases.append({
+            'id': f'{base_tc_id}-CAL-014',
+            'title': 'Формат отображения календаря по месяцам',
+            'priority': 'High',
+            'test_type': 'Positive',
+            'technique': 'ui_calendar',
+            'preconditions': preconditions,
+            'steps': [
+                {'step': 1, 'action': 'Открыть календарь'},
+                {'step': 2, 'action': 'Проверить формат отображения'}
+            ],
+            'expected_result': 'Календарь отображается в формате месяца (сеткой дней текущего месяца)',
+            'layer': 'ui',
+            'component': 'frontend',
+            'tags': ['calendar', 'view', 'ui'],
             'ui_element': ui_element
         })
 

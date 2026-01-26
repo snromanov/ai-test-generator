@@ -982,10 +982,17 @@ def state_resume():
 
 @state.command("export")
 @click.option("--output", "-o", default="artifacts/test_cases", help="Имя выходного файла")
-@click.option("--format", "-f", type=click.Choice(["excel", "csv", "both"]), default="excel")
+@click.option("--format", "-f", type=click.Choice(["excel", "csv", "allure", "both"]), default="excel")
 @click.option("--group-by-layer", is_flag=True, default=False,
               help="Группировать тест-кейсы по слоям (api, ui, integration, e2e)")
-def state_export(output: str, format: str, group_by_layer: bool):
+@click.option("--allure-suite", default="", help="Suite для Allure TestOps")
+@click.option("--allure-feature", default="", help="Feature для Allure TestOps")
+@click.option("--allure-epic", default="", help="Epic для Allure TestOps")
+@click.option("--allure-owner", default="", help="Owner для Allure TestOps")
+@click.option("--allure-jira", default="", help="Jira link для Allure TestOps")
+def state_export(output: str, format: str, group_by_layer: bool,
+                 allure_suite: str, allure_feature: str, allure_epic: str,
+                 allure_owner: str, allure_jira: str):
     """Экспортирует результаты из state."""
     sm = StateManager()
     session = sm.load()
@@ -1059,6 +1066,18 @@ def state_export(output: str, format: str, group_by_layer: bool):
         path = generator.export_to_csv(results, output)
         click.echo(f"CSV: {click.style(path, fg='green')}")
 
+    if format == "allure":
+        path = generator.export_to_allure_csv(
+            results, output,
+            suite=allure_suite,
+            feature=allure_feature,
+            epic=allure_epic,
+            owner=allure_owner,
+            jira_link=allure_jira
+        )
+        click.echo(f"Allure CSV: {click.style(path, fg='green')}")
+        click.echo("  (формат для импорта в Allure TestOps)")
+
     sm.update_progress(step="completed", action=f"exported to {format}")
 
 
@@ -1071,8 +1090,8 @@ def state_export(output: str, format: str, group_by_layer: bool):
               help="Источник требований: raw, demo/petstore, file.md, confluence:PAGE_ID")
 @click.option("--output", "-o", default="artifacts/test_cases",
               help="Путь для экспорта (без расширения)")
-@click.option("--format", "-f", type=click.Choice(["excel", "csv", "both"]), default="excel",
-              help="Формат экспорта")
+@click.option("--format", "-f", type=click.Choice(["excel", "csv", "allure", "both"]), default="excel",
+              help="Формат экспорта (allure = CSV для Allure TestOps)")
 @click.option("--agent", "-a", default="local_agent",
               help="Тип агента (local_agent, codex, qwen, claude)")
 @click.option("--no-backup", is_flag=True,
@@ -1083,6 +1102,11 @@ def state_export(output: str, format: str, group_by_layer: bool):
               help="Не группировать тесты по слоям в Excel")
 @click.option("--no-auto-detect", is_flag=True,
               help="Не использовать автоопределение layer/component")
+@click.option("--allure-suite", default="", help="Suite для Allure TestOps")
+@click.option("--allure-feature", default="", help="Feature для Allure TestOps")
+@click.option("--allure-epic", default="", help="Epic для Allure TestOps")
+@click.option("--allure-owner", default="", help="Owner для Allure TestOps")
+@click.option("--allure-jira", default="", help="Jira link для Allure TestOps")
 def generate(
     source: str,
     output: str,
@@ -1091,7 +1115,12 @@ def generate(
     no_backup: bool,
     no_clean: bool,
     no_group: bool,
-    no_auto_detect: bool
+    no_auto_detect: bool,
+    allure_suite: str,
+    allure_feature: str,
+    allure_epic: str,
+    allure_owner: str,
+    allure_jira: str
 ):
     """
     Единая команда для генерации тест-кейсов.
@@ -1137,7 +1166,12 @@ def generate(
             no_backup=no_backup,
             no_clean=no_clean,
             no_group=no_group,
-            no_auto_detect=no_auto_detect
+            no_auto_detect=no_auto_detect,
+            allure_suite=allure_suite,
+            allure_feature=allure_feature,
+            allure_epic=allure_epic,
+            allure_owner=allure_owner,
+            allure_jira=allure_jira,
         )
         
         # Запускаем pipeline
@@ -1186,7 +1220,7 @@ def generate(
 @cli.command("gen")
 @click.option("--source", "-s", default="raw", help="Источник: raw, demo/NAME, file.md")
 @click.option("--output", "-o", default="artifacts/test_cases", help="Путь экспорта")
-@click.option("--format", "-f", type=click.Choice(["excel", "csv", "both"]), default="both")
+@click.option("--format", "-f", type=click.Choice(["excel", "csv", "allure", "both"]), default="both")
 @click.pass_context
 def gen(ctx, source: str, output: str, format: str):
     """
@@ -1197,6 +1231,7 @@ def gen(ctx, source: str, output: str, format: str):
       python main.py gen                    # из raw, excel+csv
       python main.py gen -s demo/petstore   # из демо
       python main.py gen -o my_tests        # в my_tests.xlsx
+      python main.py gen -f allure          # экспорт для Allure TestOps
     """
     ctx.invoke(generate, source=source, output=output, format=format)
 
@@ -1211,10 +1246,14 @@ def show(ctx, format: str):
 
 @cli.command("export")
 @click.option("--output", "-o", default="artifacts/test_cases", help="Путь экспорта")
-@click.option("--format", "-f", type=click.Choice(["excel", "csv", "both"]), default="both")
+@click.option("--format", "-f", type=click.Choice(["excel", "csv", "allure", "both"]), default="both")
 @click.option("--group-by-layer", "-g", is_flag=True, default=True, help="Группировать по слоям")
+@click.option("--allure-suite", default="", help="Suite для Allure TestOps")
+@click.option("--allure-feature", default="", help="Feature для Allure TestOps")
+@click.option("--allure-epic", default="", help="Epic для Allure TestOps")
 @click.pass_context
-def export_cmd(ctx, output: str, format: str, group_by_layer: bool):
+def export_cmd(ctx, output: str, format: str, group_by_layer: bool,
+               allure_suite: str, allure_feature: str, allure_epic: str):
     """
     Короткий алиас для state export.
 
@@ -1223,8 +1262,11 @@ def export_cmd(ctx, output: str, format: str, group_by_layer: bool):
       python main.py export                 # excel+csv в artifacts/
       python main.py export -o my_tests     # в my_tests.xlsx/.csv
       python main.py export -f excel        # только excel
+      python main.py export -f allure --allure-suite "My Suite"  # для Allure
     """
-    ctx.invoke(state_export, output=output, format=format, group_by_layer=group_by_layer)
+    ctx.invoke(state_export, output=output, format=format, group_by_layer=group_by_layer,
+               allure_suite=allure_suite, allure_feature=allure_feature, allure_epic=allure_epic,
+               allure_owner="", allure_jira="")
 
 
 @cli.command("stats")

@@ -12,8 +12,9 @@
 
 - Загрузка требований из raw-файлов, demo и Confluence
 - Единый pipeline: загрузка → анализ → генерация → экспорт
-- Экспорт в Excel/CSV, группировка по слоям (API/UI/Integration/E2E)
+- Экспорт в Excel/CSV/Allure TestOps, группировка по слоям (API/UI/Integration/E2E)
 - Встроенные техники тест-дизайна (BVA/EP и др.)
+- Интеграция с Allure TestOps (импорт CSV)
 
 ## Установка
 
@@ -53,7 +54,7 @@ make setup
 ./generate_tests.py --source confluence:PAGE_ID
 ```
 
-Результаты: `artifacts/test_cases.xlsx` (и CSV при `--format both`).
+Результаты: `artifacts/test_cases.xlsx` (и CSV при `--format both`, Allure CSV при `--format allure`).
 Полное руководство: `QUICKSTART.md`.
 
 ### Быстрые команды Makefile
@@ -85,9 +86,20 @@ LOG_LEVEL=INFO
 # Полный pipeline (generate)
 python main.py generate --source demo/petstore
 
+# Экспорт в разных форматах
+python main.py generate --source raw --format excel    # Excel (по умолчанию)
+python main.py generate --source raw --format csv      # CSV
+python main.py generate --source raw --format allure   # Allure TestOps
+python main.py generate --source raw --format both     # Excel + CSV
+
+# Экспорт для Allure TestOps с метаданными
+python main.py generate --source raw --format allure \
+  --allure-suite "My Suite" --allure-feature "Login"
+
 # Состояние
 python main.py state show
 python main.py state export -f excel -o artifacts/test_cases
+python main.py state export -f allure --allure-suite "My Suite"
 
 # Очистка
 python main.py clean -y

@@ -506,3 +506,219 @@ class CSVExporter:
 
         logger.info(f"CSV файл сохранен: {path}")
         return str(path)
+
+
+class AllureCSVExporter:
+    """
+    Экспортер в формат CSV для Allure TestOps.
+
+    Формат соответствует реальному экспорту из Allure TestOps:
+    - Разделитель: точка с запятой (;)
+    - Сценарий: [step N] для шагов, \\t[expected N.1] для expected results
+    - Поддержка кастомных полей через маппинг
+    """
+
+    # Стандартные заголовки Allure TestOps (без allure_id для новых тест-кейсов)
+    HEADERS = [
+        "name",             # Название (обязательное)
+        "full_name",        # Полное имя
+        "automated",        # Автоматизирован (true/false)
+        "description",      # Описание
+        "precondition",     # Предусловия
+        "expected_result",  # Ожидаемый результат (на уровне тест-кейса)
+        "status",           # Статус (Draft, Ready, etc.)
+        "scenario",         # Сценарий с шагами
+        "tag",              # Теги
+        "link",             # Ссылки
+        "example",          # Примеры
+        "parameter",        # Параметры
+        "Jira",             # Ссылка на Jira
+        "Lead",             # Лид
+        "Owner",            # Владелец
+        "Suite",            # Сьют
+        "Story",            # Story
+        "Feature",          # Feature
+        "Epic",             # Epic
+    ]
+
+    def export(
+        self,
+        results: list[GenerationResult],
+        output_path: str,
+        status: str = "Draft",
+        suite: str = "",
+        feature: str = "",
+        epic: str = "",
+        owner: str = "",
+        jira_link: str = ""
+    ) -> str:
+        """
+        Экспортирует результаты в CSV файл для Allure TestOps.
+
+        Args:
+            results: Список результатов генерации
+            output_path: Путь для сохранения
+            status: Статус тест-кейсов (Draft, Ready, etc.)
+            suite: Название Suite для всех тест-кейсов
+            feature: Название Feature
+            epic: Название Epic
+            owner: Владелец тест-кейсов
+            jira_link: Ссылка на задачу в Jira
+
+        Returns:
+            Путь к созданному файлу
+        """
+        logger.info(f"Начало экспорта в Allure CSV: {output_path}")
+        path = Path(output_path)
+        if not path.suffix:
+            path = path.with_suffix(".csv")
+
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(self.HEADERS)
+
+            for result in results:
+                for tc in result.test_cases:
+                    row = self._format_test_case(
+                        tc, result, status, suite, feature, epic, owner, jira_link
+                    )
+                    writer.writerow(row)
+
+        logger.info(f"Allure CSV файл сохранен: {path}")
+        return str(path)
+
+    def _format_test_case(
+        self,
+        tc: TestCase,
+        result: GenerationResult,
+        status: str,
+        suite: str,
+        feature: str,
+        epic: str,
+        owner: str,
+        jira_link: str
+    ) -> list[str]:
+        """Форматирует тест-кейс в формат Allure TestOps."""
+
+        # Формируем теги
+        tags = self._format_tags(tc)
+
+        # Формируем сценарий в формате Allure
+        scenario = self._format_scenario(tc.steps, tc.expected_result)
+
+        # Предусловия - многострочный текст
+        precondition = ""
+        if tc.preconditions:
+            # Нумеруем предусловия
+            precondition_lines = []
+            for i, p in enumerate(tc.preconditions, 1):
+                precondition_lines.append(f"{i}. {p}")
+            precondition = "\n".join(precondition_lines)
+
+        # Описание - связь с требованием
+        description = ""
+        if result.requirement_text:
+            req_text = result.requirement_text[:1000]
+            description = f"Требование:\n{req_text}"
+
+        # Формируем Story из техники тестирования
+        story = tc.technique or ""
+
+        row = [
+            sanitize_for_excel(tc.title),          # name
+            "",                                    # full_name
+            "false",                               # automated
+            sanitize_for_excel(description),       # description
+            sanitize_for_excel(precondition),      # precondition
+            sanitize_for_excel(tc.expected_result or ""),  # expected_result
+            status,                                # status
+            scenario,                              # scenario
+            tags,                                  # tag
+            "",                                    # link
+            "",                                    # example
+            "",                                    # parameter
+            jira_link,                             # Jira
+            "",                                    # Lead
+            owner,                                 # Owner
+            suite,                                 # Suite
+            story,                                 # Story
+            feature,                               # Feature
+            epic,                                  # Epic
+        ]
+
+        return row
+
+    def _format_scenario(self, steps: list[dict], expected_result: str = "") -> str:
+        """
+        Форматирует шаги в формат сценария Allure TestOps.
+
+        Формат Allure:
+        [step N] Действие
+        \\t[expected N.1] Expected Result
+        \\t\\t[expected.step N.1.1] Конкретный результат
+
+        Args:
+            steps: Список шагов [{step: int, action: str}, ...]
+            expected_result: Общий ожидаемый результат
+
+        Returns:
+            Отформатированный сценарий
+        """
+        if not steps:
+            return ""
+
+        formatted_lines = []
+
+        for step in steps:
+            step_num = step.get('step', '')
+            action = step.get('action', '')
+
+            # Основной шаг
+            formatted_lines.append(f"[step {step_num}] {action}")
+
+            # Если есть expected для конкретного шага
+            step_expected = step.get('expected', '')
+            if step_expected:
+                formatted_lines.append(f"\t[expected {step_num}.1] Expected Result")
+                formatted_lines.append(f"\t\t[expected.step {step_num}.1.1] {step_expected}")
+
+        # Добавляем общий expected result после последнего шага если есть
+        if expected_result and steps:
+            last_step = steps[-1].get('step', len(steps))
+            # Проверяем, не добавили ли уже expected для последнего шага
+            if not steps[-1].get('expected', ''):
+                formatted_lines.append(f"\t[expected {last_step}.1] Expected Result")
+                formatted_lines.append(f"\t\t[expected.step {last_step}.1.1] {expected_result}")
+
+        return "\n".join(formatted_lines)
+
+    def _format_tags(self, tc: TestCase) -> str:
+        """
+        Форматирует теги для Allure TestOps.
+
+        Args:
+            tc: Тест-кейс
+
+        Returns:
+            Строка тегов через запятую
+        """
+        tags = []
+
+        # Добавляем существующие теги
+        existing_tags = getattr(tc, 'tags', []) or []
+        tags.extend(existing_tags)
+
+        # Добавляем тип теста как тег
+        if tc.test_type:
+            tags.append(tc.test_type)
+
+        # Добавляем приоритет как тег
+        if tc.priority:
+            tags.append(tc.priority)
+
+        # Добавляем слой как тег
+        layer = getattr(tc, 'layer', '')
+        if layer:
+            tags.append(layer.upper())
+
+        return ",".join(tags)
