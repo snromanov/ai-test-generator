@@ -9,7 +9,7 @@ from typing import Optional
 
 from src.parsers.confluence_parser import ConfluenceParser
 from src.agents.test_agent import GenerationResult
-from src.generators.exporters import ExcelExporter, CSVExporter
+from src.generators.exporters import ExcelExporter, CSVExporter, AllureCSVExporter
 from src.state.state_manager import StateManager
 from src.utils.logger import setup_logger
 from src.utils.input_validation import validate_file_size, validate_file_path, validate_requirement_length
@@ -205,6 +205,43 @@ class TestCaseGenerator:
         """
         exporter = CSVExporter()
         return exporter.export(results, output_path)
+
+    def export_to_allure_csv(
+        self,
+        results: list[GenerationResult],
+        output_path: str,
+        status: str = "Draft",
+        suite: str = "",
+        feature: str = "",
+        epic: str = "",
+        owner: str = "",
+        jira_link: str = ""
+    ) -> str:
+        """
+        Экспортирует результаты в CSV для Allure TestOps.
+
+        Формат соответствует реальному экспорту Allure TestOps:
+        - Разделитель: точка с запятой (;)
+        - Сценарий: [step N] для шагов, [expected N.1] для результатов
+        - Поддержка Suite, Feature, Epic, Owner, Jira
+
+        Args:
+            results: Результаты генерации
+            output_path: Путь для сохранения файла
+            status: Статус тест-кейсов (Draft, Ready, etc.)
+            suite: Название Suite для всех тест-кейсов
+            feature: Название Feature
+            epic: Название Epic
+            owner: Владелец тест-кейсов
+            jira_link: Ссылка на задачу в Jira
+
+        Returns:
+            Путь к созданному файлу
+        """
+        exporter = AllureCSVExporter()
+        return exporter.export(
+            results, output_path, status, suite, feature, epic, owner, jira_link
+        )
 
     def get_pending_requirements(self) -> list[str]:
         """Возвращает список необработанных требований."""
